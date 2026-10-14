@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import shlex
+
+from pilot.managers.processes.base import ServiceRenderer, override
+from pilot.managers.processes.local import ProcessDefinition
+
+
+class SystemdRenderer(ServiceRenderer):
+    """Builds systemd --user unit/socket/target text for a bench."""
+
+    @override
+    def render(self, pd: ProcessDefinition) -> str:
+        working_dir = f"WorkingDirectory={pd.working_dir}\n" if pd.working_dir else ""
+        env = "".join(f"Environment={k}={v}\n" for k, v in pd.env.items())
+        stop = f"TimeoutStopSec={pd.stop_timeout}\n" if pd.stop_timeout is not None else ""
+        # systemd stops in reverse start order; redis must outlive a lite runner draining into it.
+        after_redis = (
+            ""
+            if pd.name.startswith("redis")
+            else f"After={self.bench_name}-redis_cache.service {self.bench_name}-redis_queue.service\n"
+        )
+        return (
+            f"[Unit]\n"
+            f"Description={self.bench_name} {pd.name}\n"
+            f"PartOf={self.bench_name}.target\n"
+            f"{after_redis}\n"
+            f"[Service]\n"
+            f"Type=simple\n"
+            f"{working_dir}{env}"
+            f"ExecStart={shlex.join(pd.argv)}\n"
+            f"Restart=on-failure\n"
+            f"LimitNOFILE=65535\n"
+            f"{stop}"
+            f"StandardOutput=append:{pd.log_file}\n"
+            f"StandardError=append:{pd.log_file}.error.log\n"
+        )
+
+    def render_admin_socket(self, port: int) -> str:
+        # No PartOf: admin stays reachable while the workload is stopped.
+        return (
+            f"[Unit]\n"
+            f"Description={self.bench_name} admin (socket)\n\n"
+            f"[Socket]\n"
+            f"ListenStream=127.0.0.1:{port}\n\n"
+            f"[Install]\n"
+            f"WantedBy=default.target\n"
+        )
+
+    def render_admin_service(self, pd: ProcessDefinition, socket_name: str) -> str:
+        env = "".join(f"Environment={k}={v}\n" for k, v in pd.env.items())
+        return (
+            f"[Unit]\n"
+            f"Description={self.bench_name} admin\n"
+            f"Requires={socket_name}\n"
+            f"After={socket_name}\n"
+            # A crash loop must not trip the start limit: that fails the socket and
+            # nginx answers 502 until someone resets it.
+            f"StartLimitIntervalSec=0\n\n"
+            f"[Service]\n"
+            f"Type=simple\n"
+            f"WorkingDirectory={pd.working_dir}\n"
+            f"{env}"
+            f"ExecStart={shlex.join(pd.argv)}\n"
+            # Re-activation is via the socket, not a restart loop.
+            f"Restart=no\n"
+            # Signal gunicorn only; never cgroup-kill - tasks run as its children
+            # and must outlive it idle-stopping or restarting its socket.
+            f"KillMode=process\n"
+            f"StandardOutput=append:{pd.log_file}\n"
+            f"StandardError=append:{pd.log_file}.error.log\n"
+        )
+
+    def render_central_bootstrap(
+        self, python: str, cli_root: str, bench_root: str, log_file: str
+    ) -> str:
+        """Render the boot-time Central credential service."""
+        return (
+            f"[Unit]\n"
+            f"Description={self.bench_name} central bootstrap\n\n"
+            f"[Service]\n"
+            f"Type=simple\n"
+            f"WorkingDirectory={cli_root}\n"
+            f"Environment=PYTHONUNBUFFERED=1\n"
+            f"Environment=PYTHONPATH={cli_root}\n"
+            f"ExecStart={python} -m admin.backend.central_bootstrap --bench-root {bench_root}\n"
+            f"Restart=on-failure\n"
+            f"RestartSec=5s\n"
+            f"StandardOutput=append:{log_file}\n"
+            f"StandardError=append:{log_file}.error.log\n\n"
+            f"[Install]\n"
+            f"WantedBy=default.target\n"
+        )
+
+    def render_target(self, unit_names: list[str]) -> str:
+        return (
+            f"[Unit]\n"
+            f"Description={self.bench_name} bench\n"
+            f"Wants={' '.join(unit_names)}\n\n"
+            f"[Install]\n"
+            f"WantedBy=default.target\n"
+        )

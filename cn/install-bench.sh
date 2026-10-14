@@ -1,0 +1,164 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  pilot-cn 建 bench 阶段（以运行用户身份执行，不要求 root）
+#
+#  由 install-cn.sh 通过 `sudo -u <运行用户>` 调用。职责：
+#    pilot new → pilot init → new-site → get-app(erpnext) → install-app
+#    以及 EXTRA_APPS（其他应用）和 LOCAL_APP_PATHS（自建应用本地目录）。
+#
+#  关键：源码 URL 一律传官方 github.com 地址，由环境层写好的 git insteadOf
+#  在传输层改道到 Gitee / 内网 / 本地。Pilot 无需知道仓库实际在哪。
+# ============================================================================
+
+set -euo pipefail
+
+CN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/core.sh
+source "${CN_LIB_DIR}/lib/core.sh"
+# shellcheck source=lib/deps.sh
+source "${CN_LIB_DIR}/lib/deps.sh"
+
+PILOT_HOME="${PILOT_HOME:-$HOME/pilot}"
+export PATH="${PILOT_HOME}/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+# python-build-standalone 的 sysconfig 记录编译器为 clang，系统里只有 gcc；
+# 不覆盖会在编译 mysqlclient 等 C 扩展时报找不到 clang。
+export CC="${CC:-gcc}"
+export CXX="${CXX:-g++}"
+
+load_config
+detect_arch
+detect_os
+
+BENCH_DIR="${PILOT_HOME}/benches/${BENCH_NAME}"
+
+bench_initialized() {
+  [[ -d "${BENCH_DIR}/apps/frappe" ]]
+}
+
+# ---------------------------------------------------------------------------
+# 把生成的数据库强密码写进 common_config.toml。
+# `pilot new` 会先写入默认 root_password="root"，这里覆盖成强随机密码。
+# 幂等：只覆盖仍是默认值 "root" 的情况；已经改过就不动。
+# ---------------------------------------------------------------------------
+write_db_config() {
+  local benches_dir="${PILOT_HOME}/benches"
+  local common_file="${benches_dir}/common_config.toml"
+  mkdir -p "$benches_dir"
+
+  if [[ -f "$common_file" ]] && ! grep -q 'root_password[[:space:]]*=[[:space:]]*"root"' "$common_file" 2>/dev/null; then
+    log "common_config.toml 已是自定义数据库密码，跳过"
+    return 0
+  fi
+
+  if [[ "$DB_MODE" == "existing" ]]; then
+    log "接入已有 MariaDB：${DB_EXISTING_HOST}:${DB_EXISTING_PORT}"
+    cat > "$common_file" <<EOF
+[mariadb]
+host = "${DB_EXISTING_HOST}"
+port = ${DB_EXISTING_PORT}
+root_password = "${DB_ROOT_PASSWORD}"
+admin_user = "${DB_ROOT_USER:-root}"
+existing = true
+EOF
+  else
+    log "写入数据库强密码到 common_config.toml（Pilot 自管 MariaDB）"
+    cat > "$common_file" <<EOF
+[mariadb]
+root_password = "${DB_ROOT_PASSWORD}"
+EOF
+  fi
+  chmod 600 "$common_file"
+  ok "数据库配置已写入 $common_file"
+}
+
+# ---------------------------------------------------------------------------
+create_bench() {
+  if [[ -f "${BENCH_DIR}/bench.toml" ]]; then
+    log "bench ${BENCH_NAME} 已存在，跳过 pilot new"
+  else
+    log "创建 bench ${BENCH_NAME}"
+    pilot new "$BENCH_NAME" --admin-password "$PILOT_ADMIN_PASSWORD" \
+      || die "pilot new 失败"
+  fi
+
+  # 必须在 pilot init 之前：让数据库用强密码而不是默认的 root
+  write_db_config
+
+  if bench_initialized; then
+    log "bench 已初始化，跳过 pilot init"
+  else
+    log "初始化 bench（克隆 frappe + 装依赖 + 构建，约 20-60 分钟）"
+    pilot -b "$BENCH_NAME" init || die "pilot init 失败"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+create_site() {
+  if [[ -d "${BENCH_DIR}/sites/${SITE_NAME}" ]]; then
+    log "站点 ${SITE_NAME} 已存在"
+    return 0
+  fi
+  log "创建站点 ${SITE_NAME}（Frappe Administrator 密码用配置值，不再默认 admin）"
+  pilot -b "$BENCH_NAME" new-site "$SITE_NAME" --admin-password "$SITE_ADMIN_PASSWORD" \
+    || die "new-site 失败"
+}
+
+# ---------------------------------------------------------------------------
+install_apps() {
+  # erpnext（源码 URL 走 git insteadOf 改道，这里保持官方 github 地址）
+  if pilot -b "$BENCH_NAME" list-apps 2>/dev/null | grep -qx 'erpnext'; then
+    log "erpnext 已安装"
+  else
+    log "安装 erpnext（源码经 insteadOf 走镜像）"
+    pilot -b "$BENCH_NAME" get-app "https://github.com/frappe/erpnext" --branch "$ERPNEXT_BRANCH" \
+      || die "get-app erpnext 失败"
+    pilot -b "$BENCH_NAME" install-app "$SITE_NAME" erpnext \
+      || die "install-app erpnext 失败"
+  fi
+
+  # 其他应用（EXTRA_APPS：名字=仓库地址）
+  local app repo
+  for app in "${!EXTRA_APPS[@]}"; do
+    repo="${EXTRA_APPS[$app]}"
+    if pilot -b "$BENCH_NAME" list-apps 2>/dev/null | grep -qx "$app"; then
+      log "应用 ${app} 已安装"
+      continue
+    fi
+    log "安装应用 ${app}（${repo}）"
+    pilot -b "$BENCH_NAME" get-app "$repo" --branch "$FRAPPE_BRANCH" \
+      || die "get-app ${app} 失败"
+    pilot -b "$BENCH_NAME" install-app "$SITE_NAME" "$app" \
+      || die "install-app ${app} 失败"
+  done
+
+  # 自建应用（LOCAL_APP_PATHS：本地目录，符号链接挂载）
+  local path app_name
+  for path in "${LOCAL_APP_PATHS[@]}"; do
+    [[ -d "$path" ]] || { warn "自建应用目录不存在：$path"; continue; }
+    app_name="$(basename "$path")"
+    if pilot -b "$BENCH_NAME" list-apps 2>/dev/null | grep -qx "$app_name"; then
+      log "自建应用 ${app_name} 已安装"
+      continue
+    fi
+    log "挂载自建应用 ${app_name}（本地目录，改动即时生效）"
+    link_local_app "$BENCH_DIR" "$path"
+    pilot -b "$BENCH_NAME" install-app "$SITE_NAME" "$app_name" \
+      || die "install-app ${app_name} 失败"
+  done
+}
+
+# ---------------------------------------------------------------------------
+main() {
+  banner "建 bench / 站点 / 应用（运行用户 $USER）"
+  create_bench
+  create_site
+  install_apps
+
+  banner "完成"
+  printf '  bench：%s\n' "$BENCH_DIR"
+  printf '  站点：%s\n' "$SITE_NAME"
+  printf '  已装应用：%s\n' "$(pilot -b "$BENCH_NAME" list-apps 2>/dev/null | tr '\n' ' ')"
+  ok "下一步启动： pilot -b $BENCH_NAME start"
+}
+
+main "$@"

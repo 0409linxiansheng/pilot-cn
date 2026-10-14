@@ -1,0 +1,208 @@
+from __future__ import annotations
+
+import os
+import shlex
+import shutil
+import subprocess
+from pathlib import Path
+
+from pilot.managers.cron import CronManager
+from pilot.managers.environment import AdminEnvManager
+from pilot.managers.gunicorn import GunicornManager
+from pilot.managers.processes.base import (
+    ManagedProcessManager,
+    ServiceRenderer,
+    UnitGroup,
+    override,
+)
+from pilot.managers.processes.local import ProcessDefinition
+from pilot.utils import cli_root, run_command
+
+_BOOT_JOB = "supervisord-boot"
+
+
+class SupervisorRenderer(ServiceRenderer):
+    """Builds the bench's supervisord.conf and per-program blocks."""
+
+    def __init__(self, bench_name: str, log_dir) -> None:
+        super().__init__(bench_name)
+        self.log_dir = log_dir
+
+    @override
+    def render(self, pd: ProcessDefinition) -> str:
+        directory = f"directory={pd.working_dir}\n" if pd.working_dir else ""
+        env = ""
+        if pd.env:
+            pairs = ",".join(f'{k}="{v}"' for k, v in pd.env.items())
+            env = f"environment={pairs}\n"
+        stop = f"stopwaitsecs={pd.stop_timeout}\n" if pd.stop_timeout is not None else ""
+        # Lower priority starts first and stops last, so redis outlives what drains into it.
+        priority = "priority=100\n" if pd.name.startswith("redis") else ""
+        return (
+            f"[program:{self.get_program_name(pd)}]\n"
+            f"{priority}"
+            f"command={shlex.join(pd.argv)}\n"
+            f"{env}{directory}"
+            f"autostart=true\n"
+            f"autorestart=true\n"
+            f"startretries=3\n"
+            f"stdout_logfile={self.log_dir}/{pd.name}.log\n"
+            f"stderr_logfile={self.log_dir}/{pd.name}.error.log\n"
+            f"stopasgroup=true\n"
+            f"killasgroup=true\n"
+            f"{stop}"
+        )
+
+    def render_supervisord_conf(self, defs: list[ProcessDefinition], sock, pid) -> str:
+        workload = [pd for pd in defs if pd.name != "admin"]
+        admin = [pd for pd in defs if pd.name == "admin"]
+        admin_group = f"[group:{self.bench_name}-admin]\nprograms={self._csv(admin)}\n\n" if admin else ""
+        programs = "\n".join(self.render(pd) for pd in defs)
+        include_glob = Path(sock).parent / "supervisor.d" / "*.conf"
+        return (
+            f"[unix_http_server]\n"
+            f"file={sock}\n"
+            f"chmod=0700\n\n"
+            f"[supervisord]\n"
+            f"logfile={self.log_dir}/supervisord.log\n"
+            f"logfile_maxbytes=50MB\n"
+            f"logfile_backups=10\n"
+            f"loglevel=info\n"
+            f"pidfile={pid}\n"
+            f"nodaemon=false\n\n"
+            f"[rpcinterface:supervisor]\n"
+            f"supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface\n\n"
+            f"[supervisorctl]\n"
+            f"serverurl=unix://{sock}\n\n"
+            f"[include]\n"
+            f"files={include_glob}\n\n"
+            f"[group:{self.bench_name}]\n"
+            f"programs={self._csv(workload)}\n\n"
+            f"{admin_group}"
+            f"{programs}"
+        )
+
+    def get_program_name(self, pd: ProcessDefinition) -> str:
+        return f"{self.bench_name}-{pd.name.replace('_', '-')}"
+
+    def _csv(self, items: list[ProcessDefinition]) -> str:
+        return ",".join(self.get_program_name(pd) for pd in items)
+
+
+class SupervisorProcessManager(ManagedProcessManager):
+    """Manages bench processes via a bench-owned supervisord instance (no sudo required)."""
+
+    @property
+    def supervisor_dir(self) -> Path:
+        return self.bench.config_path / "services"
+
+    @property
+    def supervisor_conf_path(self) -> Path:
+        return self.supervisor_dir / "supervisord.conf"
+
+    @property
+    def supervisor_include_dir(self) -> Path:
+        """Stable extension directory preserved across Pilot regeneration."""
+        return self.supervisor_dir / "supervisor.d"
+
+    @property
+    def supervisor_sock(self) -> Path:
+        return self.supervisor_dir / "supervisord.sock"
+
+    @property
+    def supervisor_pid(self) -> Path:
+        return self.supervisor_dir / "supervisord.pid"
+
+    @property
+    def workload_group(self) -> str:
+        return self.bench.config.name
+
+    @property
+    def admin_group(self) -> str:
+        return f"{self.bench.config.name}-admin"
+
+    @override
+    def write_config(self) -> None:
+        AdminEnvManager(cli_root()).ensure()
+        self._ensure_redis_config()
+        self._ensure_gunicorn_config()
+        GunicornManager(self.bench).generate_admin_config()
+        self.supervisor_dir.mkdir(parents=True, exist_ok=True)
+        self.supervisor_include_dir.mkdir(parents=True, exist_ok=True)
+        renderer = SupervisorRenderer(self.bench.config.name, self.bench.logs_path)
+        self.supervisor_conf_path.write_text(
+            renderer.render_supervisord_conf(self._prod_process_definitions(), self.supervisor_sock, self.supervisor_pid)
+        )
+
+    @override
+    def install_config(self) -> None:
+        self.supervisor_dir.mkdir(parents=True, exist_ok=True)
+        # The bench owns its supervisord, so nothing else starts it after a reboot.
+        CronManager(self.bench.path).set_schedule(_BOOT_JOB, "@reboot", self._boot_command())
+
+    def _boot_command(self) -> str:
+        supervisord = shutil.which("supervisord") or "supervisord"
+        log_file = self.bench.logs_path / "supervisord-boot.log"
+        return f"{shlex.quote(supervisord)} -c {shlex.quote(str(self.supervisor_conf_path))} >> {shlex.quote(str(log_file))} 2>&1"
+
+    @override
+    def reload_manager_config(self) -> None:
+        if self.is_alive():
+            run_command([*self._supervisorctl(), "reread"])
+            run_command([*self._supervisorctl(), "update"])
+
+    @override
+    def ensure_ready(self) -> None:
+        if self.is_alive():
+            run_command([*self._supervisorctl(), "reread"])
+            run_command([*self._supervisorctl(), "update"])
+        else:
+            run_command(["supervisord", "-c", str(self.supervisor_conf_path)])
+
+    @override
+    def apply_unit_action(self, action: str, role: UnitGroup) -> None:
+        # stop/admin-restart are no-ops when the daemon is down to avoid supervisorctl errors.
+        if (action == "stop" or (action == "restart" and role is UnitGroup.ADMIN)) and not self.is_alive():
+            return
+        run_command([*self._supervisorctl(), action, self._target(role)])
+
+    @override
+    def are_units_running(self, role: UnitGroup) -> bool:
+        if not self.is_configured() or not self.is_alive():
+            return False
+        group = self.admin_group if role is UnitGroup.ADMIN else self.workload_group
+        result = subprocess.run(
+            [*self._supervisorctl(), "status", f"{group}:*"],
+            capture_output=True,
+            text=True,
+        )
+        return "RUNNING" in result.stdout
+
+    def is_configured(self) -> bool:
+        return self.supervisor_conf_path.exists()
+
+    def is_alive(self) -> bool:
+        if not self.supervisor_pid.exists():
+            return False
+        try:
+            pid = int(self.supervisor_pid.read_text().strip())
+            os.kill(pid, 0)
+            return True
+        except (ValueError, ProcessLookupError, OSError):
+            return False
+
+    def shutdown(self) -> None:
+        """Tear down everything, including the admin group and the daemon."""
+        CronManager(self.bench.path).remove_schedule(_BOOT_JOB)
+        if self.is_alive():
+            run_command([*self._supervisorctl(), "shutdown"])
+
+    def _supervisorctl(self) -> list[str]:
+        return ["supervisorctl", "-c", str(self.supervisor_conf_path)]
+
+    def _target(self, role: UnitGroup) -> str:
+        if role is UnitGroup.ADMIN:
+            return f"{self.admin_group}:*"
+        if role is UnitGroup.WEB:
+            return f"{self.bench.config.name}:{self.bench.config.name}-web"
+        return f"{self.workload_group}:*"

@@ -1,0 +1,21 @@
+# 行尾规范：Linux 解释型文件强制 LF。
+#
+# 本仓库最终跑在 Linux 服务器上。若在 Windows 上编辑后带入 CRLF，
+# shell / python 脚本会报 "bad interpreter" 或 "$'\r': command not found"。
+# .gitattributes 对所有克隆方生效，优先级高于各机器自己的 core.autocrlf。
+
+*.sh       text eol=lf
+*.conf     text eol=lf
+*.py       text eol=lf
+*.toml     text eol=lf
+bin/pilot  text eol=lf
+
+# 二进制文件不做行尾转换
+*.png    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.svg    text
+*.ico    binary
+*.woff   binary
+*.woff2  binary

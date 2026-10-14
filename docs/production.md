@@ -1,0 +1,121 @@
+# Production
+
+Production mode turns a bench into managed services behind nginx. It is meant for Linux hosts with system privileges available to the current user.
+
+## Config
+
+```toml
+[production]
+enabled = true
+process_manager = "systemd" # or "supervisor"
+
+[admin]
+enabled = true
+domain = "admin.example.com"
+tls = true
+```
+
+`admin.domain` is required when production is enabled. Set `admin.tls = false` when TLS is terminated by an external proxy.
+
+## Setup Flow
+
+```bash
+pilot setup requirements
+pilot setup config
+pilot setup nginx
+pilot setup production --admin-domain admin.example.com
+pilot setup letsencrypt
+```
+
+`pilot setup production` writes process manager config and nginx integration, and configures telemetry: it fetches this region's Datum credential from Central once, then sets up the metrics monitor and the log shipper from it. `pilot setup telemetry` does the credential and the log shipper on their own. See [Telemetry](configuration.md#telemetry).
+
+`pilot remove production` removes production deployment files and services while keeping logs, certificates, and admin domain config.
+
+## Process Managers
+
+Supported managers are `systemd` and `supervisor`.
+
+A new bench deploys one bench process plus admin and the two redis servers, because
+`[lite_mode] enabled` is the default. Turn lite mode off and the set becomes web,
+socketio, admin, workers, and redis - see [Lite Mode](configuration.md#lite-mode).
+Supervisor also runs a `schedule` process; systemd's worker pool runs the scheduler itself.
+
+Each workload unit sets `LimitNOFILE=65535`. A systemd user unit gets 1024
+descriptors by default, which is too few for a lite-mode bench process and for
+redis under load.
+
+Runtime commands:
+
+- `pilot start`
+- `pilot stop`
+- `pilot restart`
+
+`pilot restart` targets the production workload. Local development start/stop uses bench runtime managers.
+
+### Supervisor Extensions
+
+Supervisor benches may define app-specific processes in `config/services/supervisor.d/*.conf`. Pilot includes this directory from its generated `config/services/supervisord.conf` and preserves its fragments when production configuration is regenerated.
+
+After adding or changing a fragment, load it through the bench-owned Supervisor instance:
+
+```bash
+supervisorctl -c config/services/supervisord.conf reread
+supervisorctl -c config/services/supervisord.conf update
+supervisorctl -c config/services/supervisord.conf status
+```
+
+Programs declared only in extension fragments are not members of Pilot's generated workload group. Consequently, `pilot restart` does not restart them; manage those programs or their explicitly declared Supervisor group with `supervisorctl`.
+
+## Nginx And TLS
+
+Nginx config is rendered from bench and site state. Regenerate it with `pilot setup nginx` or `pilot setup config`.
+
+Let's Encrypt setup uses configured domains and should run after nginx is rendered. Site domain changes should reload nginx through site/domain code.
+
+With local TLS enabled, `pilot setup production` enables SSL for each existing site with a public site name or custom domain.
+It then requests a certificate for all public domains on each site. The local-only names `local` and `localhost`, and domains ending in `.local` or `.localhost`, stay excluded.
+
+Public certificate requests need a Let's Encrypt contact email. Pass the email during production setup:
+
+```bash
+pilot setup production --admin-domain admin.example.com --tls --letsencrypt-email ops@example.com
+```
+
+You can also set `letsencrypt.email` in `common_config.toml` before setup.
+When an upstream proxy terminates HTTPS, set `admin.tls = false` so Pilot does not change site SSL settings or request certificates.
+
+When requests arrive from configured proxy servers, Pilot preserves the forwarded scheme supplied by an edge that terminates TLS. Socket.IO also preserves an explicit browser `Origin` and reconstructs a same-origin value from the forwarded scheme and host only when that header is absent.
+
+A vhost that receives TLS through PROXY protocol v2 uses its local `$scheme` instead, because the PROXY protocol does not carry `X-Forwarded-Proto`. The scheme is chosen per vhost, so edge-terminated and passthrough vhosts can share one bench.
+
+## Admin Domain
+
+The Admin backend runs behind nginx in production. The public Admin port and the internal Gunicorn port come from `[admin]`.
+
+When using Central or another upstream proxy, keep the local Admin service private and set TLS according to where HTTPS terminates.
+
+## Firewall And WAF
+
+Firewall and WAF config are bench settings. Settings apply code should delegate to core/managers so API routes do not perform system orchestration directly.
+
+## JS Dependencies
+
+Before a build, Pilot installs each app's JS dependencies with the package manager its lockfile names: `pnpm-lock.yaml` uses pnpm, and `yarn.lock` or no lockfile uses yarn. The install uses the frozen lockfile and fails the build when the lockfile is out of date. A `frontend` or `roster` folder without its own lockfile installs from the app root when the app root workspace lists it. For an app root with `pnpm-lock.yaml`, the folder must be an importer in that lockfile. For other app roots, the folder must match the `workspaces` patterns in `package.json`. Pilot installs pnpm into `~/.local` the first time an app needs it. An app with both lockfiles fails the build.
+
+## Build Memory Cap
+
+Asset builds (`pilot build`, and rebuilds triggered from app updates) run capped at 85% of the host's free memory via a transient systemd scope, so a runaway build fails instead of the kernel picking a victim process, usually the database. Past the RAM cap the build may use the same share of free swap, and the kernel kills the build when it reaches both. A full asset build peaks near 1.6GB, and some app frontends (for example Helpdesk) need more than 2GB, so a host with 4GB of RAM needs swap to build them. An idle bench is around 300MB. Hosts with less free memory than that are refused up front with a clear message rather than started and killed mid-build.
+
+The cap applies only to hosts with `systemd-run` and cgroup memory delegation available; where neither is available the build runs uncapped with a warning. Concurrent builds are not coordinated - each sizes its cap independently from memory free at the time it starts.
+
+To set a fixed cap instead, add `memory_limit_mb` under `[build]` in `bench.toml`. Leave it unset (or 0) to keep the automatic 85% sizing.
+
+Node.js builds get a heap of 75% of the cap through `NODE_OPTIONS=--max-old-space-size`. A `--max-old-space-size` that you set in `NODE_OPTIONS` takes priority.
+
+## Operational Notes
+
+- Production changes may need non-interactive sudo.
+- Central-enabled systemd benches retry the metadata credential at boot until it is applied.
+- Generated config belongs under the bench `config/` directory or system config locations managed by the relevant manager.
+- Logs should remain available after production removal.
+- Database services are selected by `bench.db_type` and configured in `bench.toml`.

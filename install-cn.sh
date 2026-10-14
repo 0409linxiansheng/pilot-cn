@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  pilot-cn 安装入口（root 阶段）
+#
+#  这是用户唯一需要跑的命令。它把整套流程串起来：
+#    预检 → 环境层 → 装 uv → 建运行用户 → 内置 Pilot 到用户目录 → 建 bench/站点
+#
+#  用法（先克隆仓库，再以 root 运行）：
+#    git clone https://gitee.com/<账号>/pilot-cn ~/pilot
+#    cd ~/pilot && sudo bash install-cn.sh
+#
+#  也可以一条命令（curl 引导，脚本会自己克隆完整仓库）：
+#    curl -fsSL https://gitee.com/<账号>/pilot-cn/raw/main/install-cn.sh | sudo bash
+#
+#  选项：
+#    --skip-preflight   跳过预检（已有结论时）
+#    --skip-env         跳过环境层（已配好时）
+#    --skip-bench       只装 Pilot，不建 bench/站点
+#    --bench-user USER  运行用户（覆盖 mirrors.conf 里的 RUN_USER）
+# ============================================================================
+
+set -euo pipefail
+
+# 脚本可能在仓库里（正常克隆），也可能被 curl 单独拉下来（一条命令）。
+# 先定位仓库根，再加载共用库。
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 仓库 URL（引导模式用；能被环境变量覆盖）
+PILOT_REPO_URL="${PILOT_REPO_URL:-https://gitee.com/linxiansheng0409/pilot-cn}"
+PILOT_BRANCH="${PILOT_BRANCH:-main}"
+
+SKIP_PREFLIGHT=0
+SKIP_ENV=0
+SKIP_BENCH=0
+BENCH_USER_OVERRIDE=""
+
+# ---------------------------------------------------------------------------
+# 定位仓库：若当前脚本在完整仓库里则直接用；否则克隆一份。
+# ---------------------------------------------------------------------------
+resolve_repo_root() {
+  if [[ -f "$SCRIPT_DIR/config/mirrors.conf" && -d "$SCRIPT_DIR/pilot" ]]; then
+    CN_ROOT="$SCRIPT_DIR"
+    return 0
+  fi
+  # curl 单独拉下来的情况：没有 pilot/ 与 config/，克隆完整仓库
+  echo "[信息] 检测到裸脚本，从 $PILOT_REPO_URL 克隆完整仓库..."
+  local tmp; tmp="$(mktemp -d)"
+  git clone --depth 1 --branch "$PILOT_BRANCH" "$PILOT_REPO_URL" "$tmp/pilot-cn" \
+    || { echo "[错误] 克隆仓库失败。请先手动： git clone $PILOT_REPO_URL ~/pilot"; exit 1; }
+  CN_ROOT="$tmp/pilot-cn"
+  echo "[信息] 仓库已克隆到 $CN_ROOT"
+}
+
+parse_args() {
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --skip-preflight) SKIP_PREFLIGHT=1 ;;
+      --skip-env)       SKIP_ENV=1 ;;
+      --skip-bench)     SKIP_BENCH=1 ;;
+      --bench-user)     BENCH_USER_OVERRIDE="${2:?--bench-user 需要用户名}"; shift ;;
+      -h|--help)
+        sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0 ;;
+      *) echo "[错误] 未知参数：$1"; exit 1 ;;
+    esac
+    shift
+  done
+}
+
+# ---------------------------------------------------------------------------
+main() {
+  parse_args "$@"
+  [[ "${EUID}" -eq 0 ]] || { echo "[错误] 请用 root 运行： sudo bash install-cn.sh"; exit 1; }
+
+  resolve_repo_root
+  # shellcheck source=cn/lib/core.sh
+  source "${CN_ROOT}/cn/lib/core.sh"
+  CN_CONF_FILE="${CN_ROOT}/config/mirrors.conf"
+
+  load_config
+  detect_arch
+  detect_os
+
+  [[ -n "$BENCH_USER_OVERRIDE" ]] && RUN_USER="$BENCH_USER_OVERRIDE"
+  resolve_passwords
+
+  mkdir -p "$CN_STATE_DIR"
+
+  banner "pilot-cn 安装（上游 Pilot v0.0.64-pre-alpha）"
+  printf '  运行用户：%s\n  站点：%s\n  数据库模式：%s\n  依赖路线：由预检决定\n' \
+    "$RUN_USER" "$SITE_NAME" "$DB_MODE"
+
+  # ---- 阶段 1：预检 ----
+  if [[ "$SKIP_PREFLIGHT" -ne 1 ]]; then
+    if ! bash "${CN_ROOT}/cn/preflight.sh"; then
+      die "预检未通过。修复后重跑，或用 --skip-preflight 强制继续（不推荐）。"
+    fi
+  fi
+
+  # ---- 阶段 2：环境层 ----
+  if [[ "$SKIP_ENV" -ne 1 ]]; then
+    bash "${CN_ROOT}/cn/setup-env.sh" || die "环境层配置失败。"
+  fi
+
+  # ---- 阶段 3：装 uv（用 pip 镜像，不走 astral.sh）----
+  install_uv
+  # 环境层可能刚装好 uv 配置，确保立刻可读
+  export PATH="/usr/local/bin:/usr/bin:$PATH"
+
+  # ---- 阶段 4：建运行用户 ----
+  create_run_user
+
+  # ---- 阶段 5：把 Pilot 内置到运行用户目录 ----
+  local pilot_home
+  pilot_home="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+  local pilot_dir="${pilot_home}/pilot"
+  vendor_pilot "$pilot_dir"
+
+  # ---- 阶段 6：建 bench + 站点（以运行用户执行）----
+  if [[ "$SKIP_BENCH" -ne 1 ]]; then
+    sudo -u "$RUN_USER" -H \
+      env PILOT_HOME="$pilot_dir" \
+          SITE_ADMIN_PASSWORD="$SITE_ADMIN_PASSWORD" \
+          PILOT_ADMIN_PASSWORD="$PILOT_ADMIN_PASSWORD" \
+          DB_ROOT_PASSWORD="$DB_ROOT_PASSWORD" \
+          CC=gcc CXX=g++ \
+          PATH="/usr/local/bin:/usr/bin:/bin:${pilot_dir}/bin" \
+      bash "${CN_ROOT}/cn/install-bench.sh"
+  fi
+
+  banner "安装完成"
+  printf '  Pilot 目录：%s\n' "$pilot_dir"
+  printf '  bench：%s\n' "$BENCH_NAME"
+  printf '  站点：%s\n' "$SITE_NAME"
+  if [[ "$SKIP_BENCH" -eq 1 ]]; then
+    ok "只装了 Pilot。下一步： sudo -u $RUN_USER -H bash $pilot_dir/cn/install-bench.sh"
+  else
+    ok "下一步启动： sudo -u $RUN_USER -H bash -lc 'cd $pilot_dir && bin/pilot -b $BENCH_NAME start'"
+    print_login_credentials
+  fi
+}
+
+# ---------------------------------------------------------------------------
+install_uv() {
+  if command -v uv >/dev/null 2>&1; then
+    log "uv 已安装：$(uv --version)"
+    return 0
+  fi
+  log "通过 pip 镜像安装 uv（不走 astral.sh）..."
+  python3 -m pip install -q --index-url "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST" uv \
+    || die "uv 安装失败"
+  # pip --user 装到 ~/.local/bin，root 时是 /usr/local/bin；补一个软链确保在 PATH
+  if ! command -v uv >/dev/null 2>&1; then
+    local uv_bin
+    uv_bin="$(find /usr/local /root/.local -type f -name uv -path '*/bin/uv' 2>/dev/null | head -1 || true)"
+    [[ -n "$uv_bin" ]] && ln -sf "$uv_bin" /usr/local/bin/uv || die "uv 装上了但找不到可执行文件"
+  fi
+  command -v uv >/dev/null 2>&1 || die "uv 安装后仍不可用"
+  ok "uv 就绪：$(uv --version)"
+}
+
+create_run_user() {
+  [[ "$RUN_USER" == "root" ]] && return 0
+  if ! id "$RUN_USER" >/dev/null 2>&1; then
+    log "创建运行用户 $RUN_USER"
+    useradd -m -s /bin/bash "$RUN_USER"
+    passwd -l "$RUN_USER" >/dev/null 2>&1 || true
+  fi
+  log "运行用户：$RUN_USER（$(getent passwd "$RUN_USER" | cut -d: -f6)）"
+}
+
+vendor_pilot() {
+  local pilot_dir="$1"
+  log "内置 Pilot 到 $pilot_dir"
+
+  if [[ -d "$pilot_dir/.git" ]]; then
+    # 已存在且是 git 仓库：把 origin 指回 PILOT_REPO_URL，
+    # 保证 `pilot admin upgrade`（git pull）从 Gitee 拉取而不是本地路径。
+    log "  $pilot_dir 已是 git 仓库，校正 origin 指向 $PILOT_REPO_URL"
+    git -C "$pilot_dir" remote set-url origin "$PILOT_REPO_URL" 2>/dev/null || true
+  else
+    # 直接从 Gitee 克隆，origin 正确，后续升级走 git pull（国内可用）。
+    [[ -d "$pilot_dir" ]] && rm -rf "$pilot_dir"
+    git clone --depth 1 --branch "$PILOT_BRANCH" "$PILOT_REPO_URL" "$pilot_dir" \
+      || die "克隆 pilot-cn 失败：$PILOT_REPO_URL（请确认仓库已上传且地址正确）"
+  fi
+
+  # 关键：不能有 VERSION 文件，否则升级会走 api.github.com 那条死路
+  rm -f "$pilot_dir/VERSION"
+
+  chown -R "$RUN_USER":"$RUN_USER" "$pilot_dir"
+  chmod +x "$pilot_dir/bin/pilot"
+  ok "Pilot 就绪于 $pilot_dir（origin=$PILOT_REPO_URL）"
+}
+
+main "$@"
