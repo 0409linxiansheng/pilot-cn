@@ -138,12 +138,13 @@ disk_free_gb() { df -Pk "${1:-/}" | awk 'NR==2{printf "%d", $4/1024/1024}'; }
 gen_password() {
   local p=""
   if command -v openssl >/dev/null 2>&1; then
-    p="$(openssl rand -hex 12)"
+    p="$(openssl rand -base64 18 | tr -dc 'A-Za-z0-9' | head -c 16)"
   else
-    p="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+    p="$(head -c 16 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 16)"
   fi
-  [[ "${#p}" -ge 16 ]] || return 1
-  printf '%s' "$p"
+  [[ "${#p}" -ge 8 ]] || return 1
+  # 保证满足"大写+小写+数字+符号"的复杂度要求（Pilot 面板密码要求）
+  printf '%s' "${p}@Aa1"
 }
 
 # 密码固化：跨多次运行必须一致。断点续跑时，数据库里已建账号的密码和本次使用的

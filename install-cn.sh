@@ -125,7 +125,8 @@ main() {
           DB_ROOT_PASSWORD="$DB_ROOT_PASSWORD" \
           CC=gcc CXX=g++ \
           PATH="/usr/local/bin:/usr/bin:/bin:${pilot_dir}/bin" \
-      bash "${CN_ROOT}/cn/install-bench.sh"
+          XDG_RUNTIME_DIR="/run/user/$(id -u "$RUN_USER")" \
+      bash "${pilot_dir}/cn/install-bench.sh"
   fi
 
   banner "安装完成"
@@ -147,7 +148,7 @@ install_uv() {
     return 0
   fi
   log "通过 pip 镜像安装 uv（不走 astral.sh）..."
-  python3 -m pip install -q --index-url "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST" uv \
+  python3 -m pip install -q --index-url "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST" --break-system-packages uv \
     || die "uv 安装失败"
   # pip --user 装到 ~/.local/bin，root 时是 /usr/local/bin；补一个软链确保在 PATH
   if ! command -v uv >/dev/null 2>&1; then
@@ -181,7 +182,7 @@ vendor_pilot() {
   else
     # 直接从 Gitee 克隆，origin 正确，后续升级走 git pull（国内可用）。
     [[ -d "$pilot_dir" ]] && rm -rf "$pilot_dir"
-    git clone --depth 1 --branch "$PILOT_BRANCH" "$PILOT_REPO_URL" "$pilot_dir" \
+    cp -a "$CN_ROOT" "$pilot_dir" \
       || die "克隆 pilot-cn 失败：$PILOT_REPO_URL（请确认仓库已上传且地址正确）"
   fi
 

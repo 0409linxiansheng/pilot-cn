@@ -15,9 +15,9 @@
 
 set -uo pipefail
 
-CN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CN_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/core.sh
-source "${CN_LIB_DIR}/lib/core.sh"
+source "${CN_SCRIPT_DIR}/lib/core.sh"
 
 QUIET=0
 JSON_OUT=""

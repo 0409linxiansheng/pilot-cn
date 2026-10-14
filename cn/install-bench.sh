@@ -12,11 +12,11 @@
 
 set -euo pipefail
 
-CN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CN_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/core.sh
-source "${CN_LIB_DIR}/lib/core.sh"
+source "${CN_SCRIPT_DIR}/lib/core.sh"
 # shellcheck source=lib/deps.sh
-source "${CN_LIB_DIR}/lib/deps.sh"
+source "${CN_SCRIPT_DIR}/lib/deps.sh"
 
 PILOT_HOME="${PILOT_HOME:-$HOME/pilot}"
 export PATH="${PILOT_HOME}/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
@@ -25,7 +25,13 @@ export PATH="${PILOT_HOME}/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 export CC="${CC:-gcc}"
 export CXX="${CXX:-g++}"
 
+_env_site_pw="${SITE_ADMIN_PASSWORD-}"
+_env_pilot_pw="${PILOT_ADMIN_PASSWORD-}"
+_env_db_pw="${DB_ROOT_PASSWORD-}"
 load_config
+SITE_ADMIN_PASSWORD="${_env_site_pw}"
+PILOT_ADMIN_PASSWORD="${_env_pilot_pw}"
+DB_ROOT_PASSWORD="${_env_db_pw}"
 detect_arch
 detect_os
 
@@ -88,7 +94,7 @@ create_bench() {
     log "bench 已初始化，跳过 pilot init"
   else
     log "初始化 bench（克隆 frappe + 装依赖 + 构建，约 20-60 分钟）"
-    pilot -b "$BENCH_NAME" init || die "pilot init 失败"
+    pilot -b "$BENCH_NAME" init --no-dev || die "pilot init 失败"
   fi
 }
 
@@ -96,24 +102,58 @@ create_bench() {
 create_site() {
   if [[ -d "${BENCH_DIR}/sites/${SITE_NAME}" ]]; then
     log "站点 ${SITE_NAME} 已存在"
-    return 0
+  else
+    log "创建站点 ${SITE_NAME}（Frappe Administrator 密码用配置值，不再默认 admin）"
+    pilot -b "$BENCH_NAME" new-site "$SITE_NAME" --admin-password "$SITE_ADMIN_PASSWORD" \
+      || die "new-site 失败"
   fi
-  log "创建站点 ${SITE_NAME}（Frappe Administrator 密码用配置值，不再默认 admin）"
-  pilot -b "$BENCH_NAME" new-site "$SITE_NAME" --admin-password "$SITE_ADMIN_PASSWORD" \
-    || die "new-site 失败"
+  # Frappe 按 HTTP Host 头路由站点：直接访问 IP 时 Host=IP 找不到站点会 404。
+  # 写 currentsite.txt（默认站点）并为本机 IP 建软链（幂等）。
+  local sites_dir="${BENCH_DIR}/sites"
+  echo "$SITE_NAME" > "${sites_dir}/currentsite.txt"
+  local ip; ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  if [[ -n "$ip" ]]; then
+    ln -sfn "$SITE_NAME" "${sites_dir}/${ip}"
+  fi
+  log "已设置默认站点 ${SITE_NAME} 与本机 IP 软链（IP 访问不再 404）"
 }
 
 # ---------------------------------------------------------------------------
+# install-app 的数据库迁移会触发 frappe.enqueue，硬依赖 Redis Queue（11000）在线，
+# 否则报 "Error 111 connecting to localhost:11000. Connection refused."。
+# 所以 install-app 之前必须先启动 bench。
+ensure_bench_running() {
+  if ss -tlnH "sport = :11000" 2>/dev/null | grep -q .; then
+    return 0
+  fi
+  cd "$PILOT_HOME"
+  setsid nohup "$PILOT_HOME/bin/pilot" -b "$BENCH_NAME" start > "${BENCH_DIR}/bench-start.log" 2>&1 < /dev/null &
+  local i=0
+  while [[ $i -lt 45 ]]; do
+    sleep 2
+    ss -tlnH "sport = :11000" 2>/dev/null | grep -q . && return 0
+    i=$((i+1))
+  done
+  warn "90 秒内未等到 Redis Queue（11000）就绪"
+  return 1
+}
+
 install_apps() {
   # erpnext（源码 URL 走 git insteadOf 改道，这里保持官方 github 地址）
+  # 第一步：get-app（克隆源码 + 装依赖 + 构建）
   if pilot -b "$BENCH_NAME" list-apps 2>/dev/null | grep -qx 'erpnext'; then
-    log "erpnext 已安装"
+    log "erpnext 源码已在 bench 中，跳过 get-app"
   else
     log "安装 erpnext（源码经 insteadOf 走镜像）"
-    pilot -b "$BENCH_NAME" get-app "https://github.com/frappe/erpnext" --branch "$ERPNEXT_BRANCH" \
-      || die "get-app erpnext 失败"
-    pilot -b "$BENCH_NAME" install-app "$SITE_NAME" erpnext \
-      || die "install-app erpnext 失败"
+    pilot -b "$BENCH_NAME" get-app "https://github.com/frappe/erpnext" --branch "$ERPNEXT_BRANCH" || die "get-app erpnext 失败"
+  fi
+  # 第二步：启动 bench（install-app 的数据库迁移需要 Redis Queue 11000 在线）
+  ensure_bench_running || die "bench 未能在 90 秒内启动，install-app 无法继续"
+  # 第三步：install-app（数据库迁移）
+  if pilot -b "$BENCH_NAME" list-site-apps "$SITE_NAME" 2>/dev/null | grep -qx 'erpnext'; then
+    log "erpnext 已安装到站点，跳过 install-app"
+  else
+    pilot -b "$BENCH_NAME" install-app "$SITE_NAME" erpnext || die "install-app erpnext 失败"
   fi
 
   # 其他应用（EXTRA_APPS：名字=仓库地址）
@@ -149,6 +189,7 @@ install_apps() {
 
 # ---------------------------------------------------------------------------
 main() {
+  cd "$PILOT_HOME" || die "无法进入 $PILOT_HOME"
   banner "建 bench / 站点 / 应用（运行用户 $USER）"
   create_bench
   create_site

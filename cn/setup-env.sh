@@ -18,11 +18,11 @@
 
 set -euo pipefail
 
-CN_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CN_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/core.sh
-source "${CN_LIB_DIR}/lib/core.sh"
+source "${CN_SCRIPT_DIR}/lib/core.sh"
 # shellcheck source=lib/deps.sh
-source "${CN_LIB_DIR}/lib/deps.sh"
+source "${CN_SCRIPT_DIR}/lib/deps.sh"
 
 CN_STATE_DIR="${CN_STATE_DIR:-/var/lib/pilot-cn}"
 CN_DONE_DIR="${CN_STATE_DIR}/done"
@@ -119,9 +119,9 @@ setup_fonts_and_pdf() {
   # 两个都装，覆盖新旧打印功能。
   log "安装 PDF 引擎..."
   apt-get install -y -qq wkhtmltopdf || warn "wkhtmltopdf 安装失败，报表打印可能不可用"
-  apt-get install -y -qq chromium 2>/dev/null \
-    || apt-get install -y -qq chromium-browser 2>/dev/null \
-    || warn "chromium 安装失败（可选，只影响较新的打印功能）"
+#  apt-get install -y -qq chromium 2>/dev/null \
+#    || apt-get install -y -qq chromium-browser 2>/dev/null \
+#    || warn "chromium 安装失败（可选，只影响较新的打印功能）"
 
   local found=()
   command -v wkhtmltopdf >/dev/null 2>&1 && found+=("wkhtmltopdf $(wkhtmltopdf --version 2>&1 | head -1)")
@@ -237,7 +237,7 @@ setup_git_rewrite() {
   CN_ROUTE="$(sed -n 's/^CN_FINAL_ROUTE=//p' "${CN_STATE_DIR}/route.env" | tail -1)"
   CN_CHOSEN_PROXY="$(sed -n 's/^CN_CHOSEN_PROXY=//p' "${CN_STATE_DIR}/route.env" | tail -1)"
 
-  case "$final" in
+  case "$CN_ROUTE" in
     A) ok "git 改写完成，路线 A（版本与官方完全一致）" ;;
     B) ok "git 改写完成，路线 B（经代理 ${CN_CHOSEN_PROXY:-}）" ;;
     C) warn "git 改写完成，路线 C —— 版本会偏离 frappe 官方 fork" ;;
