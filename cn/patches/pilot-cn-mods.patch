@@ -48,6 +48,50 @@ index 8fc591f..b9252f2 100644
      provider = provider_for_repo(repo_url, token) or provider_for_name("github", token)
      try:
          branches = provider.list_branches(full_name)
+diff --git a/admin/backend/app.py b/admin/backend/app.py
+index 7f83f59..26eafc1 100644
+--- a/admin/backend/app.py
++++ b/admin/backend/app.py
+@@ -3,7 +3,7 @@ from __future__ import annotations
+ import os
+ from pathlib import Path
+ 
+-from flask import Flask, send_file, send_from_directory
++from flask import Flask, Response, send_file, send_from_directory
+ from werkzeug.exceptions import NotFound
+ 
+ from admin.backend.api.errors import install_api_error_handlers
+@@ -153,6 +153,15 @@ def register_in_app_embed_frontend(app: Flask) -> None:
+ def register_frontend(app: Flask) -> None:
+     """Serve the built single-page app for every path the API doesn't own."""
+ 
++    # pilot-cn：中文翻译脚本（运行时注入，文件在我们的 cn/i18n/ 层，升级不会丢）
++    @app.route("/pilot-cn-i18n.js")
++    @allow_unauthenticated
++    def serve_pilot_cn_i18n():
++        js = Path(__file__).resolve().parents[2] / "cn" / "i18n" / "pilot-zh.js"
++        if not js.is_file():
++            return Response("/* pilot-cn i18n not installed */", mimetype="application/javascript")
++        return Response(js.read_text(encoding="utf-8"), mimetype="application/javascript")
++
+     @app.route("/", defaults={"path": ""})
+     @app.route("/<path:path>")
+     @allow_unauthenticated
+@@ -176,7 +185,13 @@ def register_frontend(app: Flask) -> None:
+                     return "Asset not found.", 404
+             else:
+                 return _immutable(response) if path.startswith("assets/") else response
+-        return send_file(str(dashboard_dir / "index.html"))
++        # pilot-cn：给 SPA 的 index.html 注入中文翻译脚本
++        index_html = (dashboard_dir / "index.html").read_text(encoding="utf-8")
++        if "/pilot-cn-i18n.js" not in index_html:
++            index_html = index_html.replace(
++                "</head>", '<script defer src="/pilot-cn-i18n.js"></script>\n</head>', 1
++            )
++        return Response(index_html, mimetype="text/html")
+ 
+ 
+ def configure_idle_watchdog(
 diff --git a/admin/backend/middleware.py b/admin/backend/middleware.py
 index 6172163..368d415 100644
 --- a/admin/backend/middleware.py
