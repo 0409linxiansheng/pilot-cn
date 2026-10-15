@@ -561,3 +561,33 @@ index 4f44ce2..1404311 100644
      def fetch(self, *refspecs: str, timeout: float | None = None) -> bool:
          """Best-effort fetch from origin; returns False instead of raising on failure."""
          self.prune_stale_temp_packs()
+diff --git a/pilot/managers/processes/local.py b/pilot/managers/processes/local.py
+index 19ac3a6..b4720eb 100644
+--- a/pilot/managers/processes/local.py
++++ b/pilot/managers/processes/local.py
+@@ -53,6 +53,9 @@ _NON_RELOADABLE = frozenset({"admin", "admin-ui", "redis_cache", "redis_queue",
+ 
+ # Stopped last, so their clients are already gone and cannot log a lost connection.
+ _DATASTORES = frozenset({"redis_cache", "redis_queue"})
++# pilot-cn 加固：只有数据存储 + 管理端退出才拖垮整个 bench；
++# workload 进程（web/worker/schedule/socketio）退出时只自动重启它自己。
++_FATAL = _DATASTORES | {"admin", "admin-ui"}
+ _STOP_GRACE_SECONDS = 5
+ 
+ _COLORS = [
+@@ -275,6 +278,15 @@ class ProcessManager:
+             for name, proc in list(self._procs.items()):
+                 if proc.poll() is None:
+                     continue
++                definition = defs_by_name.get(name)
++                if is_critical[name] and name not in _FATAL:
++                    # pilot-cn 加固：workload 进程（web/worker/schedule/socketio）退出时
++                    # 只自动重启它自己，不拖垮整个 bench（上游默认是"一个进程崩，全停"）。
++                    print(f"[{name}] exited with code {proc.returncode}; restarting it", file=sys.stderr)
++                    del self._procs[name]
++                    if definition is not None:
++                        self._spawn(definition)
++                    continue
+                 if is_critical[name]:
+                     print(f"[{name}] exited with code {proc.returncode}", file=sys.stderr)
+                     self._stopping = True
