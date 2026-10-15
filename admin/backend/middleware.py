@@ -35,7 +35,7 @@ def get_auth_policy(view) -> AuthPolicy:
 def is_request_authenticated(bench) -> bool:
     authorization = request.headers.get("Authorization", "")
     token = authorization[7:] if authorization.startswith("Bearer ") else None
-    token = token or request.cookies.get("sid")
+    token = token or request.cookies.get("pilot_sid")
     if not token:
         return False
     claims = decode_session_token(token, bench, client_ip())
@@ -48,7 +48,7 @@ def is_request_authenticated(bench) -> bool:
 
 def set_session_cookie(response, token: str, secure: bool) -> None:
     response.set_cookie(
-        "sid",
+        "pilot_sid",
         token,
         max_age=24 * 3600,
         httponly=True,

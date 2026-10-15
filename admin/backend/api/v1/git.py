@@ -12,9 +12,9 @@ from pilot.integrations.git import (
     GitAuthError,
     GitCredentialStore,
     GitProviderError,
-    parse_github_owner_repo,
     provider_for_name,
     provider_for_repo,
+    repo_full_name,
     resolve_app_name_from_repo,
 )
 
@@ -140,11 +140,10 @@ def list_branches():
     token = record.get("token", "") if record and record.get("is_token_valid", True) else ""
 
     try:
-        owner, name = parse_github_owner_repo(repo_url)
+        full_name = repo_full_name(repo_url)
     except GitProviderError:
         return error_response("invalid_repository", "Enter a valid repository URL.", 422)
 
-    full_name = f"{owner}/{name}"
     provider = provider_for_repo(repo_url, token) or provider_for_name("github", token)
     try:
         branches = provider.list_branches(full_name)

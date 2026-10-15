@@ -127,7 +127,7 @@ def create_session():
 def delete_session():
     """Sign out: revoke this session's jti so the token itself stops working, not just
     the cookie in this browser."""
-    token = request.cookies.get("sid")
+    token = request.cookies.get("pilot_sid")
     if token:
         try:
             bench = Bench(Path(current_app.config["BENCH_ROOT"]))
@@ -139,7 +139,7 @@ def delete_session():
                 Session(bench).revoke_jti(claims["jti"])
                 bench.audit_action("session", {"event": "revoked", "jti": claims["jti"], "via": "logout"})
     response = no_content_response()
-    response.delete_cookie("sid")
+    response.delete_cookie("pilot_sid")
     return response
 
 

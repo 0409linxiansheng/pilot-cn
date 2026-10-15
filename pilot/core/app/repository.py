@@ -295,14 +295,26 @@ class AppRepository:
         self._sync_remote_url()
         # A named refspec creates origin/<branch> even in a single-branch clone.
         refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
-        if not repo.fetch(*self.depth_flags, refspec, timeout=_FETCH_TIMEOUT_SECONDS * 10):
-            raise BenchError(f"Could not fetch branch '{branch}' of '{self.app.config.name}'.")
-        repo.abort_merge_rebase()
-        stashed = repo.stash_all()
-        if not repo.checkout_new_branch(branch, f"origin/{branch}"):
-            if stashed:
-                repo.stash_pop()
-            raise BenchError(f"Could not switch '{self.app.config.name}' to branch '{branch}'.")
+        if repo.fetch(*self.depth_flags, refspec, timeout=_FETCH_TIMEOUT_SECONDS * 10):
+            repo.abort_merge_rebase()
+            stashed = repo.stash_all()
+            if not repo.checkout_new_branch(branch, f"origin/{branch}"):
+                if stashed:
+                    repo.stash_pop()
+                raise BenchError(f"Could not switch '{self.app.config.name}' to branch '{branch}'.")
+            self.app.config.branch = branch
+            return
+        # 不是分支，按 tag 处理：fetch tag 并 checkout 到 detached HEAD
+        self.repo.prune_stale_temp_packs()
+        run_command(
+            ["git", "-C", str(self.app.path), "fetch", *self.depth_flags, "origin", branch],
+            env=self.git_env,
+        )
+        self.repo.stash_all()
+        try:
+            run_command(["git", "-C", str(self.app.path), "checkout", "FETCH_HEAD"])
+        except CommandError as exc:
+            raise BenchError(f"Could not switch '{self.app.config.name}' to '{branch}'.") from exc
         self.app.config.branch = branch
 
     def checkout_pinned_target(self, pin: RevisionPin) -> None:

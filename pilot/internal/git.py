@@ -117,6 +117,27 @@ class GitRepo:
                 return sha
         return ""
 
+    def remote_ref_sha(self, ref: str, timeout: float = 15) -> str:
+        """SHA of origin's branch or tag tip, queried live over the network."""
+        if not ref:
+            return ""
+        result = self._run(
+            "ls-remote", "origin", f"refs/heads/{ref}", f"refs/tags/{ref}", timeout=timeout
+        )
+        best = ""
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            sha, name = parts[0], parts[1]
+            if name == f"refs/tags/{ref}^{{}}":
+                return sha
+            if name == f"refs/heads/{ref}":
+                best = sha
+            elif name == f"refs/tags/{ref}" and not best:
+                best = sha
+        return best
+
     def fetch(self, *refspecs: str, timeout: float | None = None) -> bool:
         """Best-effort fetch from origin; returns False instead of raising on failure."""
         self.prune_stale_temp_packs()

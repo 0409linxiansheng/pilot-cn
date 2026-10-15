@@ -304,6 +304,27 @@ class App:
         on_progress(f"'{app.config.name}' already installed, skipping.")
         return AppInstallResult(app, already_installed=True, installed_dependencies=dependencies)
 
+    def _switch_to_commit(
+        self,
+        commit: str,
+        install_dependencies: bool,
+        skip_assets: bool,
+        on_progress: Callable[[str], None],
+    ) -> AppInstallResult:
+        """Switch an already-installed app to a different pinned commit, then reinstall."""
+        on_progress(
+            f"'{self.config.name}' already installed at {self.installed_hash[:8]}, switching to {commit[:8]}..."
+        )
+        self.checkout_commit(commit)
+        dependencies = self._install_dependencies(on_progress, skip_assets) if install_dependencies else []
+        self._install_into_environment()
+        if not skip_assets:
+            on_progress(f"\nSetting up assets for {self.config.name}...")
+            self._build_assets_via_env_manager()
+        self.record_branch()
+        on_progress(f"\n'{self.config.name}' updated to {commit[:8]}.")
+        return AppInstallResult(self, already_installed=False, installed_dependencies=dependencies)
+
     def install(
         self,
         *,
@@ -314,6 +335,11 @@ class App:
     ) -> AppInstallResult:
         """Pinned commit based Clone, validate, install, register, and build app assets."""
         if self.bench.is_app_installed(self.config.name):
+            target_commit = commit
+            if not target_commit and self.config.branch and not self.is_commit_hash(self.config.branch):
+                target_commit = self._repository.repo.remote_ref_sha(self.config.branch)
+            if target_commit and self.installed_hash != target_commit:
+                return self._switch_to_commit(target_commit, install_dependencies, skip_assets, on_progress)
             return self._skip_already_installed(on_progress, install_dependencies, skip_assets)
 
         existing_clone = self.existing_clone_path

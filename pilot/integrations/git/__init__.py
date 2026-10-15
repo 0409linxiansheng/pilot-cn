@@ -15,7 +15,13 @@ from pilot.integrations.git.base import (
     without_credentials,
 )
 from pilot.integrations.git.credentials import CREDENTIALS_FILENAME, GitCredentialStore
-from pilot.integrations.git.github import GitHubProvider, parse_github_owner_repo
+from pilot.integrations.git.github import (
+    GitHubProvider,
+    GiteeProvider,
+    parse_github_owner_repo,
+    parse_gitee_owner_repo,
+)
+from pilot.integrations.git.local import LocalProvider
 
 __all__ = [
     "CREDENTIALS_FILENAME",
@@ -38,6 +44,7 @@ __all__ = [
 
 PROVIDERS: dict[str, type[GitProvider]] = {
     GitHubProvider.name: GitHubProvider,
+    GiteeProvider.name: GiteeProvider,
 }
 
 
@@ -52,10 +59,22 @@ def provider_for_repo(repo_url: str, token: str = "") -> GitProvider | None:
     """The provider hosting this repo, matched on hostname - never on a substring, which
     would hand github.com.attacker.example a GitHub token."""
     host = repo_host(repo_url)
+    if host == "":
+        return LocalProvider(token)  # 本地路径
     for cls in PROVIDERS.values():
         if cls.host and cls.host == host:
             return cls(token)
     return None
+
+
+def repo_full_name(repo_url: str) -> str:
+    """'owner/repo' for GitHub/Gitee, or the local path itself."""
+    host = repo_host(repo_url)
+    if host == "gitee.com":
+        return "/".join(parse_gitee_owner_repo(repo_url))
+    if host == "":
+        return repo_url
+    return "/".join(parse_github_owner_repo(repo_url))
 
 
 def resolve_app_name_from_repo(bench_root: Path, repo_url: str, branch: str = "") -> dict:
@@ -73,9 +92,8 @@ def resolve_app_name_from_repo(bench_root: Path, repo_url: str, branch: str = ""
         )
 
     requested_branch = branch.strip()
-    if requested_branch and not provider.has_branch(
-        "/".join(parse_github_owner_repo(repo_url)), requested_branch
-    ):
+    full_name = repo_full_name(repo_url)
+    if requested_branch and not provider.has_branch(full_name, requested_branch):
         raise BranchNotFoundError(f"'{requested_branch}' is not a branch of this repository.")
 
     ref = requested_branch or "HEAD"

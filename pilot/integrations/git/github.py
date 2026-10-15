@@ -16,21 +16,30 @@ from pilot.integrations.git.base import (
 from pilot.internal.git import git_env
 
 GITHUB_HOST = "github.com"
+GITEE_HOST = "gitee.com"
 _OWNER_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
-def parse_github_owner_repo(repo_url: str) -> tuple[str, str]:
-    """Extract (owner, repo) from a GitHub URL. Both land in an api.github.com path,
-    so only a plain owner and repository name are accepted."""
+def _parse_owner_repo(repo_url: str, host: str) -> tuple[str, str]:
+    """Extract (owner, repo) from a URL hosted at `host`."""
     url = normalize_to_https(repo_url).rstrip("/").removesuffix(".git")
     parts = url.split("/")
-    # Expect ['https:', '', 'github.com', 'owner', 'repo']
-    if len(parts) < 5 or urllib.parse.urlsplit(url).hostname != GITHUB_HOST:
+    if len(parts) < 5 or urllib.parse.urlsplit(url).hostname != host:
         raise GitProviderError(f"Cannot parse owner/repo from URL: {repo_url!r}")
     owner, repository = parts[-2], parts[-1]
     if not (_OWNER_REPO_RE.match(owner) and _OWNER_REPO_RE.match(repository)):
         raise GitProviderError(f"Cannot parse owner/repo from URL: {repo_url!r}")
     return owner, repository
+
+
+def parse_github_owner_repo(repo_url: str) -> tuple[str, str]:
+    """Extract (owner, repo) from a GitHub URL."""
+    return _parse_owner_repo(repo_url, GITHUB_HOST)
+
+
+def parse_gitee_owner_repo(repo_url: str) -> tuple[str, str]:
+    """Extract (owner, repo) from a Gitee URL."""
+    return _parse_owner_repo(repo_url, GITEE_HOST)
 
 
 class GitHubProvider(GitProvider):
@@ -86,7 +95,7 @@ class GitHubProvider(GitProvider):
         repo_url = f"https://{self.host}/{full_name}"
         try:
             result = subprocess.run(
-                ["git", "ls-remote", "--heads", repo_url],
+                ["git", "ls-remote", repo_url],
                 capture_output=True,
                 text=True,
                 timeout=30,
@@ -100,40 +109,100 @@ class GitHubProvider(GitProvider):
             if "authentication failed" in result.stderr.lower():
                 raise GitAuthError(f"GitHub rejected the stored token for {full_name}.")
             raise GitProviderError(f"Could not list branches for {full_name}.")
-        return [
-            line.split("refs/heads/", 1)[1]
-            for line in result.stdout.splitlines()
-            if "refs/heads/" in line
-        ]
+        branches: list[str] = []
+        tags: list[str] = []
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            ref = parts[1]
+            if ref.startswith("refs/heads/"):
+                branches.append(ref[len("refs/heads/"):])
+            elif ref.startswith("refs/tags/"):
+                tag = ref[len("refs/tags/"):]
+                if not tag.endswith("^{}"):
+                    tags.append(tag)
+        # 分支在前（保持 git 顺序），标签按名称倒序（高版本靠前）
+        return branches + sorted(set(tags), reverse=True)
 
     def has_branch(self, full_name: str, branch: str) -> bool:
-        url = f"{self.api_base}/repos/{full_name}/branches/{urllib.parse.quote(branch, safe='')}"
+        # 用 git ls-remote 检查分支或标签是否存在，不依赖 api.github.com（国内可达）
+        repo_url = f"https://{self.host}/{full_name}"
         try:
-            self._get_json(url, self._headers())
-        except GitProviderError:
+            result = subprocess.run(
+                ["git", "ls-remote", repo_url],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=git_env(self.auth_config(repo_url)),
+            )
+        except (subprocess.TimeoutExpired, OSError):
             return False
-        return True
+        if result.returncode != 0:
+            return False
+        wanted = {f"refs/heads/{branch}", f"refs/tags/{branch}"}
+        for line in result.stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[1] in wanted:
+                return True
+        return False
 
     def get_default_branch(self, full_name: str) -> str:
-        url = f"{self.api_base}/repos/{full_name}"
-        data, _ = self._get_json(url, self._headers())
-        return data.get("default_branch", "")
+        # 用 git ls-remote --symref 取默认分支，不依赖 api.github.com（国内可达）
+        repo_url = f"https://{self.host}/{full_name}"
+        try:
+            result = subprocess.run(
+                ["git", "ls-remote", "--symref", repo_url, "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=git_env(self.auth_config(repo_url)),
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return ""
+        if result.returncode != 0:
+            return ""
+        for line in result.stdout.splitlines():
+            if line.startswith("ref: refs/heads/"):
+                rest = line[len("ref: refs/heads/"):]
+                return rest.split()[0].strip()
+        return ""
 
     def fetch_raw_file(self, repo_url: str, path: str, ref: str = "HEAD") -> str:
-        owner, repo = parse_github_owner_repo(repo_url)
-        url = f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{path}"
-        headers = {"User-Agent": "pilot"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        req = urllib.request.Request(url, headers=headers)
-        try:
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                return resp.read().decode()
-        except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
-                raise GitAuthError(f"Access denied reading {path} from repository.") from exc
-            if exc.code == 404:
+        # 用 git 浅克隆读取文件，不依赖 raw.githubusercontent.com（国内可达）
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            clone_args = ["git", "clone", "--depth", "1"]
+            if ref and ref != "HEAD":
+                clone_args += ["--branch", ref]
+            clone_args += [repo_url, tmpdir]
+            try:
+                result = subprocess.run(
+                    clone_args,
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    env=git_env(self.auth_config(repo_url)),
+                )
+            except subprocess.TimeoutExpired as exc:
+                raise GitProviderError(f"Timed out reading {path} from repository.") from exc
+            except OSError as exc:
+                raise GitProviderError("Git is required to read repository files.") from exc
+            if result.returncode != 0:
+                if "authentication failed" in result.stderr.lower():
+                    raise GitAuthError("GitHub rejected the stored token for this repository.")
+                raise GitProviderError(f"Could not read repository at ref {ref!r}.")
+            file_path = Path(tmpdir) / path
+            try:
+                return file_path.read_text()
+            except OSError as exc:
                 raise GitProviderError(f"{path} not found in repository.") from exc
-            raise GitProviderError(f"HTTP {exc.code} reading {path}.") from exc
-        except urllib.error.URLError as exc:
-            raise GitProviderError(f"Could not reach GitHub: {exc.reason}.") from exc
+
+
+class GiteeProvider(GitHubProvider):
+    """Gitee (码云) provider, reusing the git-command implementations (no API dependency)."""
+    name = "gitee"
+    host = GITEE_HOST
+    api_base = "https://gitee.com/api/v5"
