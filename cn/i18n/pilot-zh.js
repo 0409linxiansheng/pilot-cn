@@ -605,6 +605,26 @@
     'Insert': '插入'
   });
 
+  // ─────────────────────────── 存储页 + 动态模式 ───────────────────────────
+  Object.assign(DICT, {
+    'Database storage': '数据库存储', 'App storage': '应用存储', 'of': '/', 'used': '已用'
+  });
+
+  var PATTERNS = [
+    { re: /^(\d+) databases$/, repl: '$1 个数据库' },
+    { re: /^(\d+) apps$/, repl: '$1 个应用' },
+    { re: /^(\d+) sites$/, repl: '$1 个站点' },
+    { re: /^(\d+) backups?$/, repl: '$1 份备份' },
+    { re: /^(\w+) (binary log|error log|slow query log|binary log index|write-ahead log|server log|core files)$/,
+      repl: function (m, engine, label) {
+        var E = { mariadb: 'MariaDB', postgresql: 'PostgreSQL', sqlite: 'SQLite' };
+        var L = { 'binary log': '二进制日志', 'error log': '错误日志', 'slow query log': '慢查询日志',
+                  'binary log index': '二进制日志索引', 'write-ahead log': '预写日志',
+                  'server log': '服务器日志', 'core files': '核心文件' };
+        return (E[engine] || engine) + ' ' + (L[label] || label);
+      } }
+  ];
+
   // ─────────────────────────── 运行时翻译逻辑 ───────────────────────────
   var SKIP = { SCRIPT: 1, STYLE: 1, CODE: 1, PRE: 1, TEXTAREA: 1, SVG: 1 };
   var ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];
@@ -615,6 +635,11 @@
     var key = raw.trim();
     if (!key) return;
     var hit = DICT[key];
+    if (hit === undefined) {
+      for (var i = 0; i < PATTERNS.length; i++) {
+        if (PATTERNS[i].re.test(key)) { hit = key.replace(PATTERNS[i].re, PATTERNS[i].repl); break; }
+      }
+    }
     if (hit === undefined || hit === key) return;
     node.nodeValue = raw.replace(key, hit);
   }
