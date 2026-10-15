@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -14,7 +15,9 @@ from pilot.internal.git import GitRepo
 from pilot.managers.cron import CronManager, cron_module_command
 from pilot.utils import run_command
 
-REGISTRY_URL = "https://github.com/frappe/marketplace"
+REGISTRY_URL = os.environ.get(
+    "PILOT_MARKETPLACE_URL", "https://gitee.com/linxiansheng0409/marketplace"
+)
 
 _REFRESH_INTERVAL_SECONDS = 60 * 60
 _LS_REMOTE_TIMEOUT_SECONDS = 15
