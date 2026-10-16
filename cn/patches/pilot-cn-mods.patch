@@ -1,3 +1,23 @@
+diff --git a/admin/backend/api/v1/apps.py b/admin/backend/api/v1/apps.py
+index 45c4979..95a92c2 100644
+--- a/admin/backend/api/v1/apps.py
++++ b/admin/backend/api/v1/apps.py
+@@ -102,6 +102,15 @@ def _install_request(data, bench_root: Path):
+ 
+ def _queue_install_task(bench_root: Path, task_args: dict, sites: list[str]) -> str:
+     bench = Bench(bench_root)
++    if not sites:
++        # pilot-cn 加固：单站点 bench 下，导入应用时默认装到该唯一站点，
++        # 避免"导入成功但站点里没有"的困惑（与前端 InstallAppDialog 的 soleSite 一致）。
++        try:
++            existing = [st for st in bench.sites() if st.exists]
++            if len(existing) == 1:
++                sites = [existing[0].config.name]
++        except Exception:
++            pass
+     if sites:
+         return GetAndInstallAppTask.queue(
+             bench,
 diff --git a/admin/backend/api/v1/auth.py b/admin/backend/api/v1/auth.py
 index 09ea3c1..b44bca1 100644
 --- a/admin/backend/api/v1/auth.py
