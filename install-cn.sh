@@ -203,10 +203,14 @@ verify_install() {
   fi
 
   # 5) 数据库能连
-  if mariadb --socket="${pilot_dir}/databases/mariadb/run/mysqld.sock" -u root -e 'SELECT 1' >/dev/null 2>&1; then
+  # 注意：root 密码已被 write_db_config 设成强随机，必须带 -p；
+  # 生成的密码只含 [A-Za-z0-9@]，直接拼在 -p 后面是安全的（-p 与密码之间不能有空格）。
+  local sock="${pilot_dir}/databases/mariadb/run/mysqld.sock"
+  if [[ -S "$sock" ]] \
+     && mariadb --socket="$sock" -u root -p"${DB_ROOT_PASSWORD}" -e 'SELECT 1' >/dev/null 2>&1; then
     ok "MariaDB 可连接"
   else
-    warn "MariaDB 连不上（socket: ${pilot_dir}/databases/mariadb/run/mysqld.sock）"; fails=$((fails + 1))
+    warn "MariaDB 连不上（socket: ${sock}）"; fails=$((fails + 1))
   fi
 
   if [[ "$fails" -eq 0 ]]; then
