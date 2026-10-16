@@ -611,6 +611,7 @@
   });
 
   var PATTERNS = [
+    { re: /^Permanently deletes (.+) and all its data\.$/, repl: '永久删除 $1 及其所有数据。' },
     { re: /^(\d+) databases$/, repl: '$1 个数据库' },
     { re: /^(\d+) apps$/, repl: '$1 个应用' },
     { re: /^(\d+) sites$/, repl: '$1 个站点' },
@@ -773,6 +774,15 @@
     'Matches are logged, not blocked. Review': '匹配的请求只记录、不阻止。查看'
   });
 
+  // ─────────────────────────── 站点操作说明（原本漏掉）───────────────────────────
+  Object.assign(DICT, {
+    "Clear this site's cache if something looks stale.": '缓存看起来过期时，清除本站点的缓存。',
+    'Wipes the database back to a fresh install. Apps stay; all your data is removed.':
+      '把数据库恢复到全新安装状态。应用保留，你的所有数据会被删除。',
+    'Replace its data with uploaded backup files, another site, or a remote site.':
+      '用上传的备份文件、其他站点或远程站点的数据替换本站点数据。'
+  });
+
   // ─────────────────────────── 运行时翻译逻辑 ───────────────────────────
   var SKIP = { SCRIPT: 1, STYLE: 1, CODE: 1, PRE: 1, TEXTAREA: 1, SVG: 1 };
   var ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];
@@ -804,7 +814,32 @@
     }
   }
 
-  function runAll() { if (document.body) walk(document.body); }
+  // 下拉框（frappe-ui Combobox / reka-ui）选中后的值显示在 <input role="combobox"> 的
+  // value 里，不是文本节点；而且 Vue 改的是 property，MutationObserver 抓不到，
+  // 所以定期扫一遍。打开下拉时先还原成英文，否则搜索会匹配不到选项。
+  var REV = {};
+  for (var rk in DICT) { if (REV[DICT[rk]] === undefined) REV[DICT[rk]] = rk; }
+
+  function syncComboboxInputs() {
+    var inputs = document.querySelectorAll('input[role="combobox"]');
+    for (var i = 0; i < inputs.length; i++) {
+      var el = inputs[i];
+      if (document.activeElement === el) continue;
+      var v = el.value;
+      if (!v) continue;
+      if (el.getAttribute('aria-expanded') === 'true') {
+        if (REV[v] !== undefined) el.value = REV[v];
+      } else {
+        var hit = DICT[v.trim()];
+        if (hit !== undefined && hit !== v) el.value = hit;
+      }
+    }
+  }
+
+  function runAll() {
+    if (document.body) walk(document.body);
+    syncComboboxInputs();
+  }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', runAll);
   else runAll();
@@ -816,6 +851,8 @@
       else for (var j = 0; j < m.addedNodes.length; j++) walk(m.addedNodes[j]);
     }
   }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+
+  setInterval(syncComboboxInputs, 400);
 
   window.__pilotCn = { dict: DICT, run: runAll, count: Object.keys(DICT).length };
 })();
