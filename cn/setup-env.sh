@@ -76,12 +76,14 @@ setup_apt() {
            /etc/apt/sources.list.d/debian.sources; do
     [[ -f "$f" ]] || continue
     [[ -f "${f}.pilot-cn.orig" ]] || cp "$f" "${f}.pilot-cn.orig"
+    # 注意 [a-z0-9.-]* 前缀：Ubuntu 中文镜像默认写的是 cn.archive.ubuntu.com，
+    # 只匹配 archive.ubuntu.com 会漏掉它，导致国内镜像替换没生效。
     sed -i \
-      -e "s|https\?://archive\.ubuntu\.com/ubuntu|${APT_MIRROR}|g" \
-      -e "s|https\?://security\.ubuntu\.com/ubuntu|${APT_MIRROR}|g" \
-      -e "s|https\?://ports\.ubuntu\.com/ubuntu-ports|${APT_MIRROR_PORTS}|g" \
-      -e "s|https\?://deb\.debian\.org/debian|${APT_MIRROR}|g" \
-      -e "s|https\?://deb\.debian\.org/debian-security|${APT_MIRROR}|g" \
+      -e "s|https\?://[a-z0-9.-]*archive\.ubuntu\.com/ubuntu|${APT_MIRROR}|g" \
+      -e "s|https\?://[a-z0-9.-]*security\.ubuntu\.com/ubuntu|${APT_MIRROR}|g" \
+      -e "s|https\?://[a-z0-9.-]*ports\.ubuntu\.com/ubuntu-ports|${APT_MIRROR_PORTS}|g" \
+      -e "s|https\?://[a-z0-9.-]*deb\.debian\.org/debian-security|${APT_MIRROR}|g" \
+      -e "s|https\?://[a-z0-9.-]*deb\.debian\.org/debian|${APT_MIRROR}|g" \
       "$f"
     log "  已处理 $f（原件备份为 ${f}.pilot-cn.orig）"
   done
@@ -456,6 +458,29 @@ setup_database_and_cache() {
     || die "数据库/缓存安装失败"
 
   ok "MariaDB $(mariadb --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) · Redis $(redis-server --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+
+  # --- nginx / certbot：生产模式要用 ---
+  # Pilot 的 setup production 会自己装 nginx，但那条路要走免密 sudo；预先装好更稳。
+  # certbot 用于 --tls（国内未备案域名会失败，但装上不影响）。
+  log "安装 nginx 与 certbot（生产模式用）..."
+  apt-get install -y -qq nginx certbot python3-certbot-nginx 2>/dev/null \
+    && ok "  nginx $(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) · certbot 已安装" \
+    || warn "  nginx/certbot 安装失败（只影响生产模式）"
+
+  # Fluent Bit 是生产模式的日志收集组件，Ubuntu 源里没有；装不上不阻塞。
+  if ! command -v fluent-bit >/dev/null 2>&1; then
+    if curl -fsSL --max-time 25 https://packages.fluentbit.io/fluentbit.key 2>/dev/null \
+       | gpg --dearmor > /usr/share/keyrings/fluentbit-keyring.gpg 2>/dev/null; then
+      echo "deb [signed-by=/usr/share/keyrings/fluentbit-keyring.gpg] https://packages.fluentbit.io/ubuntu/noble noble main" \
+        > /etc/apt/sources.list.d/fluent-bit.list
+      apt-get update -qq 2>/dev/null || true
+      apt-get install -y -qq fluent-bit 2>/dev/null \
+        && ok "  fluent-bit 已安装（生产模式日志收集）" \
+        || warn "  fluent-bit 安装失败（只影响生产模式的日志收集）"
+    else
+      warn "  fluent-bit 源不可达，跳过（只影响生产模式的日志收集）"
+    fi
+  fi
   warn "运行用户的 systemd 会话（linger）由 install-cn.sh 在建用户时开启"
 }
 
