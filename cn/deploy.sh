@@ -74,16 +74,23 @@ find "$TARGET" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null 
 
 if [[ "$RESTART" -eq 1 ]]; then
   RUN_USER="${OWNER%%:*}"
-  log "重启 bench '$BENCH' ..."
-  sudo -u "$RUN_USER" -H pkill -f "bin/pilot -b $BENCH start" 2>/dev/null || true
-  sudo -u "$RUN_USER" -H pkill -f 'redis-server 127.0.0.1:1[13]000' 2>/dev/null || true
-  sudo -u "$RUN_USER" -H pkill -f 'bench_helper' 2>/dev/null || true
-  sudo -u "$RUN_USER" -H pkill -f 'admin.backend.run_server' 2>/dev/null || true
-  sudo -u "$RUN_USER" -H pkill -f 'socketio.js' 2>/dev/null || true
+  # runuser 从 root 降权不会像嵌套 sudo 那样等待密码或 tty
+  as_user() { runuser -u "$RUN_USER" -- "$@"; }
+
+  log "停止 bench '$BENCH' ..."
+  pkill -u "$RUN_USER" -f "bin/pilot -b $BENCH start" 2>/dev/null || true
+  pkill -u "$RUN_USER" -f 'redis-server 127.0.0.1:1[13]000' 2>/dev/null || true
+  pkill -u "$RUN_USER" -f 'bench_helper' 2>/dev/null || true
+  pkill -u "$RUN_USER" -f 'admin.backend.run_server' 2>/dev/null || true
+  pkill -u "$RUN_USER" -f 'socketio.js' 2>/dev/null || true
   sleep 5
-  sudo -u "$RUN_USER" -H env XDG_RUNTIME_DIR="$RUNTIME" bash -c \
-    "cd '$TARGET' && setsid nohup ./bin/pilot -b $BENCH start > benches/$BENCH/bench-start.log 2>&1 < /dev/null &"
-  sleep 12
+
+  log "启动 bench '$BENCH' ..."
+  as_user env XDG_RUNTIME_DIR="$RUNTIME" bash -c \
+    "cd '$TARGET' && setsid nohup ./bin/pilot -b $BENCH start > benches/$BENCH/bench-start.log 2>&1 < /dev/null &" \
+    > /dev/null 2>&1 < /dev/null
+  sleep 20
+
   log "端口检查："
   ss -tlnH 2>/dev/null | grep -E ':7000|:8000|:11000|:13000' | awk '{print "  " $4}' || true
 fi
