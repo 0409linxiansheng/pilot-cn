@@ -134,6 +134,61 @@ index 6172163..368d415 100644
          token,
          max_age=24 * 3600,
          httponly=True,
+diff --git a/admin/frontend/dashboard/src/components/apps/AddAppFromGithubDialog.vue b/admin/frontend/dashboard/src/components/apps/AddAppFromGithubDialog.vue
+index 22267fa..2827aeb 100644
+--- a/admin/frontend/dashboard/src/components/apps/AddAppFromGithubDialog.vue
++++ b/admin/frontend/dashboard/src/components/apps/AddAppFromGithubDialog.vue
+@@ -35,7 +35,7 @@ const router = useRouter()
+ const tab = ref('public')
+ const tabOptions = [
+   { label: 'Public repository', value: 'public', class: 'flex-1' },
+-  { label: 'Your GitHub account', value: 'private', class: 'flex-1' },
++  { label: 'Your GitHub account', value: 'private', class: 'flex-1' },  // GitHub 账号授权（列你自己的仓库）
+ ]
+ const repo = ref('')
+ const branch = ref('')
+@@ -196,7 +196,7 @@ const submit = async () => {
+ </script>
+ 
+ <template>
+-  <Dialog v-model="open" title="Import app from GitHub" size="md">
++  <Dialog v-model="open" title="Import app from a Git repository" size="md">
+     <TabButtons
+       v-model="tab"
+       :options="tabOptions"
+@@ -209,7 +209,7 @@ const submit = async () => {
+         label="Repository URL"
+         v-model="repo"
+         class="flex-1"
+-        placeholder="https://github.com/frappe/crm"
++        placeholder="https://gitee.com/frappe/erpnext"
+       />
+       <Combobox
+         v-if="fetched"
+@@ -226,6 +226,10 @@ const submit = async () => {
+       </Combobox>
+     </div>
+ 
++    <p v-if="tab === 'public'" class="mt-2 text-ink-gray-5 text-sm">
++      Any Git host works: GitHub, Gitee, GitLab, or any Git server.
++    </p>
++
+     <template v-else>
+       <p v-if="!gitStatus" class="text-ink-gray-5 text-sm">Loading…</p>
+ 
+diff --git a/admin/frontend/dashboard/src/components/search/index.ts b/admin/frontend/dashboard/src/components/search/index.ts
+index 7ec2800..bd4d600 100644
+--- a/admin/frontend/dashboard/src/components/search/index.ts
++++ b/admin/frontend/dashboard/src/components/search/index.ts
+@@ -38,7 +38,7 @@ export const useSearchIndex = () => {
+     const actions: SearchItem[] = [
+       { name: 'New site', icon: 'lucide-plus', route: '/sites?new=1' },
+       {
+-        name: 'Add app from GitHub',
++        name: 'Add app from a Git repository',
+         icon: 'lucide-package-plus',
+         route: '/marketplace?addFromGithub=1',
+       },
 diff --git a/admin/frontend/dashboard/src/composables/apps/useMarketplace.ts b/admin/frontend/dashboard/src/composables/apps/useMarketplace.ts
 index f2886ed..c219f88 100644
 --- a/admin/frontend/dashboard/src/composables/apps/useMarketplace.ts

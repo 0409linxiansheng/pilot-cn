@@ -38,7 +38,7 @@ export const useSearchIndex = () => {
     const actions: SearchItem[] = [
       { name: 'New site', icon: 'lucide-plus', route: '/sites?new=1' },
       {
-        name: 'Add app from GitHub',
+        name: 'Add app from a Git repository',
         icon: 'lucide-package-plus',
         route: '/marketplace?addFromGithub=1',
       },

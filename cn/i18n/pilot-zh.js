@@ -625,6 +625,20 @@
       } }
   ];
 
+  // ─────────────────────────── 导入应用（多渠道）───────────────────────────
+  Object.assign(DICT, {
+    'Import app from a Git repository': '从 Git 仓库导入应用',
+    'Import app from GitHub': '从 Git 仓库导入应用',
+    'Add app from a Git repository': '从 Git 仓库添加应用',
+    'Add app from GitHub': '从 Git 仓库添加应用',
+    'Any Git host works: GitHub, Gitee, GitLab, or any Git server.':
+      '任意 Git 主机都可以：GitHub、Gitee、GitLab 或任何 Git 服务器。',
+    'Repository URL': '仓库地址',
+    'Your GitHub account': '你的 GitHub 账号',
+    'No GitHub account connected': '未连接 GitHub 账号',
+    'Connect GitHub': '连接 GitHub'
+  });
+
   // ─────────────────────────── 运行时翻译逻辑 ───────────────────────────
   var SKIP = { SCRIPT: 1, STYLE: 1, CODE: 1, PRE: 1, TEXTAREA: 1, SVG: 1 };
   var ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];

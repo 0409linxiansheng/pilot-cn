@@ -35,7 +35,7 @@ const router = useRouter()
 const tab = ref('public')
 const tabOptions = [
   { label: 'Public repository', value: 'public', class: 'flex-1' },
-  { label: 'Your GitHub account', value: 'private', class: 'flex-1' },
+  { label: 'Your GitHub account', value: 'private', class: 'flex-1' },  // GitHub 账号授权（列你自己的仓库）
 ]
 const repo = ref('')
 const branch = ref('')
@@ -196,7 +196,7 @@ const submit = async () => {
 </script>
 
 <template>
-  <Dialog v-model="open" title="Import app from GitHub" size="md">
+  <Dialog v-model="open" title="Import app from a Git repository" size="md">
     <TabButtons
       v-model="tab"
       :options="tabOptions"
@@ -209,7 +209,7 @@ const submit = async () => {
         label="Repository URL"
         v-model="repo"
         class="flex-1"
-        placeholder="https://github.com/frappe/crm"
+        placeholder="https://gitee.com/frappe/erpnext"
       />
       <Combobox
         v-if="fetched"
@@ -225,6 +225,10 @@ const submit = async () => {
         <template #item-typed-branch="{ query }"> Use branch “{{ query }}” </template>
       </Combobox>
     </div>
+
+    <p v-if="tab === 'public'" class="mt-2 text-ink-gray-5 text-sm">
+      Any Git host works: GitHub, Gitee, GitLab, or any Git server.
+    </p>
 
     <template v-else>
       <p v-if="!gitStatus" class="text-ink-gray-5 text-sm">Loading…</p>
