@@ -164,6 +164,7 @@ resolve_passwords() {
   if [[ -z "${SITE_ADMIN_PASSWORD:-}"  ]]; then SITE_ADMIN_PASSWORD="$(gen_password)";  generated=1; fi
   if [[ -z "${PILOT_ADMIN_PASSWORD:-}" ]]; then PILOT_ADMIN_PASSWORD="$(gen_password)"; generated=1; fi
   if [[ -z "${DB_ROOT_PASSWORD:-}"      ]]; then DB_ROOT_PASSWORD="$(gen_password)";      generated=1; fi
+  if [[ -z "${RUN_USER_PASSWORD:-}"     ]]; then RUN_USER_PASSWORD="$(gen_password)";     generated=1; fi
 
   (
     umask 077
@@ -174,6 +175,7 @@ resolve_passwords() {
 SITE_ADMIN_PASSWORD='${SITE_ADMIN_PASSWORD}'
 PILOT_ADMIN_PASSWORD='${PILOT_ADMIN_PASSWORD}'
 DB_ROOT_PASSWORD='${DB_ROOT_PASSWORD}'
+RUN_USER_PASSWORD='${RUN_USER_PASSWORD}'
 EOF
   ) || die "写入 $CN_SECRETS_FILE 失败"
   chmod 600 "$CN_SECRETS_FILE"
@@ -197,6 +199,7 @@ print_login_credentials() {
   printf '  %-22s %s\n' "ERPNext 密码"      "$SITE_ADMIN_PASSWORD"
   printf '  %-22s %s\n' "Pilot 管理面板"   "http://${ip}:7000"
   printf '  %-22s %s\n' "管理面板密码"     "$PILOT_ADMIN_PASSWORD"
+  printf '  %-22s %s\n' "系统用户"         "${RUN_USER:-erpnext} / ${RUN_USER_PASSWORD:-（未设置）}"
   printf '\n  %s\n' "密码也存于 $CN_SECRETS_FILE（600）。数据库密码不在此展示。"
   printf '%b\n' "${c_bold}============================================${c_reset}"
   warn "首次登录后请立即修改 Administrator 密码（用户菜单 → 修改密码）。"

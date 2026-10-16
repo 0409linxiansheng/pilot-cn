@@ -167,7 +167,40 @@ create_run_user() {
     useradd -m -s /bin/bash "$RUN_USER"
     passwd -l "$RUN_USER" >/dev/null 2>&1 || true
   fi
+
+  # 给运行用户设一个强密码，和站点/面板密码一起固化并打印
+  if [[ -n "${RUN_USER_PASSWORD:-}" ]]; then
+    echo "$RUN_USER:$RUN_USER_PASSWORD" | chpasswd \
+      && ok "已设置 $RUN_USER 的登录密码（见下方登录凭据）"
+  fi
+
+  grant_caller_access
   log "运行用户：$RUN_USER（$(getent passwd "$RUN_USER" | cut -d: -f6)）"
+}
+
+# 让发起安装的人（SSH 登录用户）能在 VSCode 里浏览运行用户的家目录。
+# 家目录是 drwxr-x---，是唯一挡住别人的一层；下面的目录本来就是组可读写。
+grant_caller_access() {
+  local viewer="${SUDO_USER:-${USER:-}}"
+  [[ -n "$viewer" && "$viewer" != "root" && "$viewer" != "$RUN_USER" ]] || return 0
+  id "$viewer" >/dev/null 2>&1 || return 0
+
+  local home
+  home="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+
+  log "授予 $viewer 访问 $home 的权限"
+  usermod -aG "$RUN_USER" "$viewer" 2>/dev/null || true
+  chmod g+rx "$home" 2>/dev/null || true
+
+  # ACL 立即生效；组变更只对新会话生效，所以两者都做
+  command -v setfacl >/dev/null 2>&1 \
+    || DEBIAN_FRONTEND=noninteractive apt-get install -y -q acl >/dev/null 2>&1 || true
+  if command -v setfacl >/dev/null 2>&1; then
+    setfacl -m "u:${viewer}:rx" "$home" 2>/dev/null || true
+    ok "$viewer 立即可访问 $home；组变更重登后对终端生效"
+  else
+    warn "$viewer 已加入 $RUN_USER 组，重新登录后生效"
+  fi
 }
 
 vendor_pilot() {
