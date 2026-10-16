@@ -129,6 +129,15 @@ main() {
       bash "${pilot_dir}/cn/install-bench.sh"
   fi
 
+  # ---- 阶段 7：验收（确认真的装好了，而不是只看"下一步"提示）----
+  if [[ "${AUTO_VERIFY:-1}" -ne 1 ]]; then
+    warn "已按 AUTO_VERIFY=0 跳过验收"
+  elif [[ "$SKIP_BENCH" -eq 1 ]]; then
+    log "只装 Pilot 模式，跳过验收"
+  else
+    verify_install "$RUN_USER" "$pilot_dir" || warn "验收有异常项，请看上面的逐项结果"
+  fi
+
   banner "安装完成"
   printf '  Pilot 目录：%s\n' "$pilot_dir"
   printf '  bench：%s\n' "$BENCH_NAME"
@@ -139,6 +148,73 @@ main() {
     ok "下一步启动： sudo -u $RUN_USER -H bash -lc 'cd $pilot_dir && bin/pilot -b $BENCH_NAME start'"
     print_login_credentials
   fi
+}
+
+# ---------------------------------------------------------------------------
+# 装完真验一遍：服务在跑、端口在听、站点在列、面板能应答、数据库能连。
+# 之前只打印"下一步启动"，装成什么样全靠用户自己看；AUTO_VERIFY 这个开关
+# 在配置里存在却从未被使用。
+# ---------------------------------------------------------------------------
+verify_install() {
+  local run_user="$1" pilot_dir="$2"
+  local run_uid bench_dir fails=0
+  run_uid="$(id -u "$run_user")"
+  bench_dir="${pilot_dir}/benches/${BENCH_NAME}"
+
+  banner "验收（实际检查安装结果）"
+
+  # 1) 关键端口
+  local pair port label
+  for pair in "7000:管理面板" "8000:站点 HTTP" "11000:Redis 队列" "13000:Redis 缓存"; do
+    port="${pair%%:*}"; label="${pair#*:}"
+    if ss -tlnH "sport = :${port}" 2>/dev/null | grep -q .; then
+      ok "端口 ${port} 在监听（${label}）"
+    else
+      warn "端口 ${port} 没在监听（${label}）"; fails=$((fails + 1))
+    fi
+  done
+
+  # 2) bench 进程
+  if pgrep -u "$run_user" -f "bin/pilot -b ${BENCH_NAME} start" >/dev/null 2>&1; then
+    ok "bench 进程在运行"
+  else
+    warn "bench 进程不在运行"; fails=$((fails + 1))
+  fi
+
+  # 3) 站点与应用
+  local apps=""
+  apps="$(sudo -u "$run_user" -H env XDG_RUNTIME_DIR="/run/user/${run_uid}" \
+            PATH="/usr/local/bin:/usr/bin:/bin:${pilot_dir}/bin" \
+            "${pilot_dir}/bin/pilot" -b "$BENCH_NAME" list-site-apps "$SITE_NAME" 2>/dev/null \
+          | tr '\n' ' ' || true)"
+  if [[ "$apps" == *erpnext* ]]; then
+    ok "站点 ${SITE_NAME} 已装应用：${apps}"
+  else
+    warn "站点 ${SITE_NAME} 上看不到 erpnext（当前：${apps:-空}）"; fails=$((fails + 1))
+  fi
+
+  # 4) 管理面板应答
+  local code
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 "http://127.0.0.1:7000/" 2>/dev/null || echo 000)"
+  if [[ "$code" == "200" ]]; then
+    ok "管理面板应答 HTTP 200"
+  else
+    warn "管理面板应答 HTTP ${code}"; fails=$((fails + 1))
+  fi
+
+  # 5) 数据库能连
+  if mariadb --socket="${pilot_dir}/databases/mariadb/run/mysqld.sock" -u root -e 'SELECT 1' >/dev/null 2>&1; then
+    ok "MariaDB 可连接"
+  else
+    warn "MariaDB 连不上（socket: ${pilot_dir}/databases/mariadb/run/mysqld.sock）"; fails=$((fails + 1))
+  fi
+
+  if [[ "$fails" -eq 0 ]]; then
+    ok "验收全部通过"
+    return 0
+  fi
+  warn "验收有 ${fails} 项异常，可对照上面的提示逐个排查"
+  return 1
 }
 
 # ---------------------------------------------------------------------------
