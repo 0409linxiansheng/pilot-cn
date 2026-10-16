@@ -202,7 +202,20 @@ verify_install() {
     warn "管理面板应答 HTTP ${code}"; fails=$((fails + 1))
   fi
 
-  # 5) 数据库能连
+  # 5) 站点能应答
+  # 必须带站点名做 Host：Frappe 按 Host 路由，用 127.0.0.1 访问会因为找不到站点而 404，
+  # 极易被误判成"站点坏了"。
+  local http_port
+  http_port="$(sed -n 's/^http_port[[:space:]]*=[[:space:]]*//p' "${bench_dir}/bench.toml" 2>/dev/null | head -1)"
+  http_port="${http_port:-8000}"
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 -H "Host: ${SITE_NAME}" "http://127.0.0.1:${http_port}/" 2>/dev/null || echo 000)"
+  if [[ "$code" == "200" ]]; then
+    ok "站点 ${SITE_NAME} 应答 HTTP 200（端口 ${http_port}）"
+  else
+    warn "站点 ${SITE_NAME} 应答 HTTP ${code}（端口 ${http_port}）"; fails=$((fails + 1))
+  fi
+
+  # 6) 数据库能连
   # 注意：root 密码已被 write_db_config 设成强随机，必须带 -p；
   # 生成的密码只含 [A-Za-z0-9@]，直接拼在 -p 后面是安全的（-p 与密码之间不能有空格）。
   local sock="${pilot_dir}/databases/mariadb/run/mysqld.sock"
