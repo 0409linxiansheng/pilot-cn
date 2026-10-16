@@ -2,7 +2,7 @@
 
 > 让 ERPNext 在国内网络环境下**装得上、用得住、能持续升级**。
 
-> **文档状态**：本文是本项目的设计说明，用于评审。标注 🔧 的部分尚未实现。
+> **文档状态**：设计说明 + 实现现状。✅ 已实现，🔧 待实现。日常升级/部署命令见「十二、日常维护」。
 
 ---
 
@@ -347,20 +347,34 @@ Pilot 的迁移链会自动执行：
 
 ## 十、和官方 Pilot 的差异（改动清单）
 
-我们的目标是**把改动压到最小**，这样官方更新时维护成本才低。
+我们的目标是**把改动压到最小**，这样官方更新时维护成本才低。全部源码改动集中在 `cn/patches/pilot-cn-mods.patch`（14 个文件），升级时由 `cn/upgrade.sh` 自动重放。
 
-| # | 改动 | 为什么 | 状态 |
-|---|---|---|---|
-| 1 | 外部地址收敛到统一配置 | 铁律 4 | 🔧 |
-| 2 | 新增 `pilot doctor` 预检 | 解决"不知道哪错了" | 🔧 |
-| 3 | 新增 `pilot setup mirrors` 一键配源 | 让环境层可复现 | 🔧 |
-| 4 | 注册 `GiteeProvider` + 通用兜底 provider | 多渠道支持 | 🔧 |
-| 5 | 修 `resolve_app_name_from_repo` 硬编码 GitHub | 同上 | 🔧 |
-| 6 | 证书目录可配置（`cert_dir`） | 国内用云厂商证书，不用 Let's Encrypt | 🔧 |
-| 7 | `--no-takeover` 开关 | 不接管机器上已有的 MariaDB/Redis/nginx | 🔧 |
-| 8 | 公网 IP 探测端点可配置 | 现在用 `8.8.8.8`，国内不通 | 🔧 |
-| 9 | S3 备份增加国内厂商 | 现在只有 AWS/DO/Hetzner | 🔧 |
-| 10 | `install.sh` 国产系统适配 | 麒麟 / 统信 / openEuler 等 | 🔧 |
+### 已实现
+
+| # | 改动 | 涉及文件 |
+|---|---|---|
+| 1 | 多渠道 Git 支持（Gitee / 本地目录 / 任意 Git 服务器） | `pilot/integrations/git/` |
+| 2 | 应用仓库自动识别应用名（去掉 GitHub 硬编码） | `pilot/core/app/repository.py`、`pilot/internal/git.py` |
+| 3 | 应用市场 registry 指向 Gitee（可用环境变量覆盖） | `pilot/core/registry_cache.py` |
+| 4 | **中文界面**：运行时注入，不改前端源码；后端每次请求重读词表，改翻译**不用重启** | `admin/backend/app.py` + `cn/i18n/pilot-zh.js`（1056 条） |
+| 5 | **进程崩溃不拖垮整个 bench**：只有 redis / admin 是致命进程，web / worker / scheduler / socketio 崩了只自动重启自身 | `pilot/managers/processes/local.py` |
+| 6 | **导入应用自动装到唯一站点**：单站点 bench 下不再"只下载不安装" | `admin/backend/api/v1/apps.py` |
+| 7 | 市场页自动选中唯一站点 | `admin/frontend/dashboard/src/composables/apps/useMarketplace.ts` |
+| 8 | 隐藏 Cloud Settings（自建环境用不到 Frappe Cloud） | `admin/backend/api/v1/auth.py`、`middleware.py` |
+| 9 | **上游升级机制**：补丁 + 重放脚本 + 升级后自动重编译前端 | `cn/upgrade.sh`、`cn/patches/` |
+| 10 | 部署脚本：源码 → 运行实例一键同步（含前端产物） | `cn/deploy.sh` |
+
+### 未实现（🔧）
+
+| # | 改动 | 现状 |
+|---|---|---|
+| 1 | `pilot doctor` 预检子命令 | 已有独立脚本 `cn/preflight.sh`，未接进 CLI |
+| 2 | 证书目录可配置（`cert_dir`） | 未做。国内用云厂商证书，目前仍走 Let's Encrypt 路径 |
+| 3 | `--no-takeover`（不接管机器上已有的 MariaDB / Redis / nginx） | 未做 |
+| 4 | 公网 IP 探测端点可配置 | 未做（仍用 `8.8.8.8`，国内不通会误报域名） |
+| 5 | S3 备份增加国内厂商 | 未做 |
+| 6 | `install.sh` 国产系统适配（麒麟 / 统信 / openEuler） | 未做（目前只验证过 Ubuntu 24.04） |
+| 7 | 网页里加预检页 | 未做 |
 
 ### 明确不做的事
 
@@ -368,8 +382,7 @@ Pilot 的迁移链会自动执行：
 |---|---|
 | ❌ 改 `frappe` / `erpnext` 代码 | 会毁掉持续升级能力（铁律 1） |
 | ❌ 把 Pilot 塞进 Docker 容器 | Pilot 是宿主机编排器，两套编排会抢地盘 |
-| ❌ 重写升级/迁移链 | 现有的备份 + 回滚设计扎实，重写风险极高 |
-| ❌ 改 Pilot 的网页界面（除非加预检页） | 保持上游一致性 |
+| ❌ 重写升级 / 迁移链 | 现有的备份 + 回滚设计扎实，重写风险极高 |
 | ⏸ 国密 SM2 证书 | 需要另起一套 CA，独立课题 |
 | ⏸ 全离线安装包 | 独立课题，可作为后续阶段 |
 
@@ -387,19 +400,43 @@ Pilot 的迁移链会自动执行：
 
 ---
 
-## 十二、维护方式
+## 十二、日常维护
+
+三条命令覆盖日常操作，都在仓库根目录执行。
+
+### 部署：源码 → 运行实例
+
+```bash
+sudo cn/deploy.sh              # 同步源码 + 前端构建产物
+sudo cn/deploy.sh --restart    # 同步后重启 bench
+```
+
+前端产物 `admin/backend/static/*` 被 `.gitignore` 忽略，必须单独同步，否则界面还是旧的。`deploy.sh` 用 `rsync` 同步，并对已部署的静态文件加 `P`（protect）保护，避免 `--delete` 误删。
+
+### 升级：跟随上游
+
+```bash
+cn/upgrade.sh --list              # 列出可选的上游 tag
+cn/upgrade.sh v0.0.65-pre-alpha   # 升级到该版本
+```
+
+升级流水线：拉上游 tag → 用上游内容替换 `pilot/` `admin/` → 删掉"我们加过、上游没有"的文件 → `git apply --3way` 重放补丁 → **重新编译三个前端**（dashboard / editor / in-app-embed）→ 抽查关键改动（`GiteeProvider`、`LocalProvider`、`remote_ref_sha`、`pilot_sid` 等）。
+
+我们的层（`cn/`、`config/`、`install-cn.sh`）不在 `pilot/` `admin/` 里，升级不会碰。
+
+### 维护流程
 
 ```
 frappe/pilot（官方）
         │  定期同步（建议每月一次）
         ▼
 我们的 fork（只含最小改动）
-        │  pilot admin upgrade = git pull
+        │  cn/upgrade.sh 升级 + cn/deploy.sh 部署
         ▼
 生产服务器
 ```
 
-**关键约束**：改动越少越好。目标是把所有改动压到**一个新模块 + 少量单行替换 + 两个新命令**，这样官方更新时同步成本接近零。
+**关键约束**：改动越少越好。目前全部源码改动 = 14 个文件，清单见 `cn/patches/pilot-cn-mods.patch`。
 
 ---
 
@@ -472,19 +509,30 @@ pilot -b main setup production --admin-domain admin.example.com
 
 ## 附：本文档的定位
 
-这份 README 同时是**设计说明**和**评审材料**。带 🔧 标记的部分尚未实现。
+这份 README 同时是**设计说明**和**维护指南**。✅ 表示已实现，🔧 表示待实现。
 
-**评审时请重点看**：
+**改动前请重点看**：
 
-1. 第二节的**四条铁律**——这是底线，动了就要重来
-2. 第四节的**三层架构**——决定了改动放在哪里
-3. 第六节的**预检四分类**——决定了用户遇到问题时的体验
-4. 第十三节的**待定问题**——这七个需要你拍板
+1. 第二节的**四条铁律** —— 这是底线，动了就要重来
+2. 第四节的**三层架构** —— 决定了改动应该放在哪一层
+3. 第十节的**改动清单** —— 已经改过哪些文件
+4. 第十二节的**日常维护** —— 升级和部署命令
 
-确认无误后，实现顺序建议：
+**新改动的落点**：
 
-```
-先做预检脚本（第 1 步）→ 它决定了后面所有工作的优先级
-再做环境层（第 2 步）→ 它是所有路线的公共地基
-最后改 Pilot（第 3 步）→ 改动范围会因为前两步而大幅缩小
+1. 能写进配置文件（第 0 层）的，绝不写进代码
+2. 必须改 Pilot 源码的，收进 `cn/patches/pilot-cn-mods.patch`，改动越少越好
+3. 属于我们自己的东西（脚本、词表、源配置）放 `cn/` 和 `config/`，升级不会碰
+
+**每次改完源码的三步**：
+
+```bash
+# 1. 重新生成补丁，保证升级时能重放
+git diff upstream-base -- pilot/ admin/ ':(exclude)admin/frontend/in-app-embed/dev.sh' > cn/patches/pilot-cn-mods.patch
+
+# 2. 前端源码改过就重新编译（否则界面还是旧的）
+cd admin/frontend/dashboard && npm install && npm run build
+
+# 3. 部署到运行实例（可选 --restart 重启 bench）
+sudo cn/deploy.sh --restart
 ```
