@@ -639,6 +639,140 @@
     'Connect GitHub': '连接 GitHub'
   });
 
+  // ─────────────────────────── 第二轮补漏（扫描 1072 条候选后）───────────────────────────
+  Object.assign(DICT, {
+    // 按钮 / 通用
+    'Save changes': '保存更改', 'Advanced': '高级', 'Not now': '暂不', 'Revoke': '注销',
+    'Revoke other sessions': '注销其他会话', 'Preview data': '预览数据', 'Purge': '清理',
+    'Download as CSV': '下载为 CSV', 'Copy key': '复制密钥', 'Kill': '终止', 'File': '文件',
+    'Version': '版本', 'You': '你', 'Date/time': '日期/时间', 'Disk I/O': '磁盘 I/O',
+    'View job': '查看任务', 'View SQL Query': '查看 SQL 查询', 'Verify credentials': '验证凭据',
+    'Get backups': '获取备份', 'New app': '新建应用', 'Set up bench': '初始化 bench',
+    'Back to configuration': '返回配置', 'Close connection': '关闭连接',
+    'Clear this site': '清除本站点', 'Manage Storage': '管理存储',
+    'Measure this bench': '重新测算此 bench', 'Found frappe': '已找到 frappe',
+
+    // 空状态
+    'No results to display': '没有可显示的结果', 'No results found': '未找到结果',
+    'No rows returned.': '没有返回数据行。', 'No tables found.': '未找到表。',
+    'No config keys.': '暂无配置项。', 'No log files found.': '未找到日志文件。',
+    'No benches found.': '未找到 bench。', 'No sites available on this bench.': '此 bench 没有可用站点。',
+    'No sites on this bench yet. Create a site to install apps.': '此 bench 还没有站点。创建站点后才能装应用。',
+    'No apps installed on this site.': '此站点没有安装任何应用。',
+    'No backups yet. Take a new backup.': '暂无备份。请新建一次备份。',
+    'No database variables match this search.': '没有匹配的数据库变量。',
+    'No rule matches in this window.': '此时间窗口内没有规则命中。',
+    'No sources in this window.': '此时间窗口内没有来源。',
+    'No runtime versions detected.': '未检测到运行时版本。',
+    'No slow queries recorded yet': '暂无慢查询记录',
+
+    // 时间 / 数量
+    '1 hour': '1 小时', '6 hours': '6 小时', '12 hours': '12 小时', '24 hours': '24 小时',
+    '1 week': '1 周', '30 minutes': '30 分钟', '% and above': '% 及以上',
+    '100 lines': '100 行', '200 lines': '200 行', '500 lines': '500 行', '1000 lines': '1000 行',
+
+    // 说明文案
+    'Add a rule to block or log requests by path, IP, method, header, and more.':
+      '添加规则：按路径、IP、方法、请求头等阻止或记录请求。',
+    'Add condition': '添加条件', 'Add key': '添加键',
+    'Alerts are emailed to these addresses, using the mailbox in Mail settings.':
+      '告警会通过「邮件设置」里的发件箱发送到这些地址。',
+    'Alerts go to': '告警发送到',
+    'Browse and edit the files of installed apps.': '浏览并编辑已安装应用的文件。',
+    "Can't scan? Enter the key by hand": '扫不了？手动输入密钥',
+    'Check the concerning queries that might be affecting your database performance':
+      '检查可能影响数据库性能的可疑查询',
+    'Checked before the managed rules, top to bottom.': '按从上到下的顺序，在托管规则之前检查。',
+    'Collect database instrumentation for deeper performance diagnostics.':
+      '采集数据库埋点，用于更深入的性能诊断。',
+    'Configure background worker groups and queues.': '配置后台工作进程组与队列。',
+    'Connected as': '已连接为',
+    'DNS changes can take a few minutes to propagate.': 'DNS 变更可能需要几分钟才生效。',
+    'Database actions are available only for Pilot-managed MariaDB instances.':
+      '数据库操作仅对 Pilot 托管的 MariaDB 实例可用。',
+    'Debug with AI': '用 AI 调试',
+    'Enable Developer mode in Settings to use the code editor.':
+      '在设置里开启开发者模式后即可使用代码编辑器。',
+    'Failing patch': '失败的补丁', 'Forgot password?': '忘记密码？',
+    'GitHub Username': 'GitHub 用户名', 'GitHub · Personal access token': 'GitHub · 个人访问令牌',
+    'IP / CIDR': 'IP / CIDR',
+    'One process for web, realtime and jobs. Less memory, best for small sites.':
+      'web、实时与任务共用一个进程。内存占用更少，适合小站点。',
+    'Open Frappe Cloud': '打开 Frappe Cloud', 'Patch skipped': '已跳过补丁',
+    'Percentage of successful pings to /api/method/ping in this window':
+      '此时间窗口内 /api/method/ping 的探测成功率',
+    "Point this domain's DNS A record to this server": '把该域名的 DNS A 记录指向本服务器',
+    'Purge binary logs?': '清理二进制日志？',
+    'Queries run against that site': '对该站点执行的查询',
+    'Query executed successfully': '查询执行成功',
+    'Rebuild JS and CSS for this site': '为此站点重建 JS 与 CSS',
+    'Replace its data with uploaded backup files, another site, or a remote site.':
+      '用上传的备份文件、其他站点或远程站点的数据替换本站点数据。',
+    'Restore this update?': '还原此更新？', 'Retry update': '重试更新',
+    'Run in Read/Write mode': '以读/写模式运行',
+    'Scan with Authy, Bitwarden, Microsoft Authenticator or any TOTP app.':
+      '用 Authy、Bitwarden、Microsoft Authenticator 或任意 TOTP 应用扫描。',
+    'Select a table to view its columns.': '选择一张表以查看其字段。',
+    'Set up a mailbox in Mail settings before these addresses receive anything.':
+      '请先在「邮件设置」里配置发件箱，否则这些地址收不到任何内容。',
+    'Skip this patch permanently?': '永久跳过此补丁？',
+    "The web address you'll use to open this bench.": '你用来打开此 bench 的网址。',
+    'This query will run in': '此查询将以', 'Turn it on in Settings': '在设置里开启',
+    'Web address:': '网址：',
+    'Why connect an AI assistant?': '为什么要连接 AI 助手？',
+    'Why connect object storage?': '为什么要连接对象存储？',
+    'You have changes here that have not been saved. Leaving loses them.':
+      '这里有未保存的更改，离开将会丢失。',
+    'Your bench is ready. Run one of these in your terminal:': 'bench 已就绪。在终端里执行其中一条：',
+    'Your bench is up to date.': 'bench 已是最新。',
+    'and run it again to use the new version.': '然后重新运行以使用新版本。',
+    'as completed for': '标记为已完成，针对', 'default, short, long': 'default, short, long',
+    'either one': '任一条',
+    'header, so the token stays out of the URL.': '请求头，这样令牌不会出现在 URL 里。',
+    'of the following match:': '满足以下任一条件：',
+    'of these records at your domain provider.': '在域名服务商处添加这些记录。',
+    'pilot new my-bench': 'pilot new my-bench', 'pilot setup production': 'pilot setup production',
+    'pilot start': 'pilot start',
+    'reloads this page automatically once the bench is back.': 'bench 恢复后会自动刷新本页。',
+    'rule for your own IP': '你自己 IP 的规则', 'scope below.': '下面的范围。',
+    'the firewall analytics': '防火墙分析',
+
+    // 被插值拆开的片段（按整段文本节点匹配）
+    "A Let's Encrypt email is required to issue and renew certificates.":
+      "申请和续期证书必须填写 Let's Encrypt 邮箱。",
+    ', or you may lock yourself out of the web UI.': '，否则你可能把自己锁在管理界面之外。',
+    ', then switch to Block.': '，再切换到「阻止」。',
+    '? This cannot be undone.': '？此操作无法撤销。',
+    "Setup Let": '配置 Let', 'Issue a Let': '签发 Let',
+    "Keys passed to this site's": '传递给本站点的键',
+    'Monitoring hasn': '监控尚未', 'The monitor hasn': '监控器尚未',
+    'Pilot updates itself. Then stop': 'Pilot 会先自我更新，然后停止',
+    'Skipping marks': '跳过会把', 'Visitors see a': '访客会看到',
+    'Install private apps and browse your repos. Paste a': '安装私有应用、浏览你的仓库。粘贴一个',
+    'Open Frappe Cloud and enter this pass code to allow access to the backups of':
+      '打开 Frappe Cloud 并输入这个一次性代码，以允许访问以下站点的备份：',
+    'STEP KEY,TIMESTAMP label': '步骤 键,时间戳 标签',
+    'STEP-FAILED KEY,TIMESTAMP': 'STEP-FAILED 键,时间戳',
+    '203.0.113.4 or 10.0.0.0/8': '203.0.113.4 或 10.0.0.0/8'
+  });
+
+  // ─────────────────────────── 最后一轮（扫描残留）───────────────────────────
+  Object.assign(DICT, {
+    '? Its codes stop working. Removing the last device turns two-factor off.':
+      '？它的验证码将失效。移除最后一台设备会关闭两步验证。',
+    'Its codes stop working. Removing the last device turns two-factor off.':
+      '它的验证码将失效。移除最后一台设备会关闭两步验证。',
+    '? Requests it was matching fall through to the managed ruleset.':
+      '？它原本匹配的请求会落到托管规则集上。',
+    'Requests it was matching fall through to the managed ruleset.':
+      '它原本匹配的请求会落到托管规则集上。',
+    '? Whoever holds the matching private key loses SSH access.':
+      '？持有对应私钥的人将失去 SSH 访问权限。',
+    'Whoever holds the matching private key loses SSH access.':
+      '持有对应私钥的人将失去 SSH 访问权限。',
+    'Matches are logged, not blocked. Review': '匹配的请求只记录、不阻止。查看'
+  });
+
   // ─────────────────────────── 运行时翻译逻辑 ───────────────────────────
   var SKIP = { SCRIPT: 1, STYLE: 1, CODE: 1, PRE: 1, TEXTAREA: 1, SVG: 1 };
   var ATTRS = ['placeholder', 'title', 'aria-label', 'alt'];
