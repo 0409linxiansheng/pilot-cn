@@ -216,6 +216,68 @@ EOF
     yarn config set disturl "$NODE_BINARY_MIRROR" --global >/dev/null 2>&1 || true
   fi
   ok "Node 镜像配置完成"
+
+  # --- Node.js 本体 ---
+  # Pilot 在 Linux 上不自己装 Node（它直接报 "Node.js is not installed. Re-run install.sh"），
+  # 上游靠 install.sh 装；pilot-cn 必须在这里装好，否则 pilot init 第 8 步失败。
+  # frappe v16 要求 Node >= 24，发行版自带的是 18。
+  local have_major=""
+  command -v node >/dev/null 2>&1 \
+    && have_major="$(node --version 2>/dev/null | sed 's/^v//' | cut -d. -f1)"
+  if [[ -n "$have_major" && "$have_major" -ge "${NODE_MAJOR:-24}" ]] 2>/dev/null; then
+    ok "Node 已满足要求（$(node --version)）"
+  else
+    log "安装 Node.js ${NODE_MAJOR}.x（走 ${NODE_BINARY_MIRROR}）..."
+    install_node_from_mirror "${NODE_MAJOR:-24}"
+  fi
+
+  # --- yarn ---
+  # frappe 的前端构建用 yarn。corepack 默认从 yarnpkg.com 拉，国内很慢；
+  # 优先用 npm 从国内源装（corepack 作为兜底）。
+  if ! command -v yarn >/dev/null 2>&1; then
+    log "安装 yarn ${YARN_VERSION}（走 ${NPM_REGISTRY}）..."
+    npm install -g "yarn@${YARN_VERSION}" --registry="$NPM_REGISTRY" >/dev/null 2>&1 \
+      && ok "  yarn $(yarn --version 2>/dev/null) 已安装" \
+      || warn "  yarn 安装失败，前端构建可能受影响"
+  else
+    ok "yarn 已存在（$(yarn --version 2>/dev/null)）"
+  fi
+}
+
+# 从国内二进制镜像装 Node，解到 /usr/local/node-<版本>，再把 bin 软链到 /usr/local/bin
+install_node_from_mirror() {
+  local major="$1" arch version url b
+  arch="$(uname -m)"
+  [[ "$arch" == "x86_64" ]] && arch="x64"
+  [[ "$arch" == "aarch64" ]] && arch="arm64"
+
+  version="${NODE_VERSION}"
+  if [[ -z "$version" ]]; then
+    version="$(curl -fsSL --max-time 25 "${NODE_BINARY_MIRROR}/index.json" 2>/dev/null \
+      | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+v=[x['version'] for x in d if x['version'].startswith('v${major}.') and 'linux-${arch}' in str(x.get('files',[]))]
+print(sorted(v, key=lambda s:[int(p) for p in s[1:].split('.')])[-1] if v else '')
+" 2>/dev/null)"
+  fi
+  [[ -n "$version" ]] || { warn "  取不到 Node ${major}.x 的版本号，请手工安装 Node"; return 0; }
+
+  url="${NODE_BINARY_MIRROR}/${version}/node-${version}-linux-${arch}.tar.xz"
+  log "  ${url}"
+  if curl -fsSL --max-time 600 "$url" -o /tmp/node-pilot-cn.tar.xz; then
+    rm -rf "/usr/local/node-${version}"
+    mkdir -p "/usr/local/node-${version}"
+    tar -xJf /tmp/node-pilot-cn.tar.xz -C "/usr/local/node-${version}" --strip-components=1
+    for b in node npm npx corepack; do
+      [[ -x "/usr/local/node-${version}/bin/${b}" ]] \
+        && ln -sf "/usr/local/node-${version}/bin/${b}" "/usr/local/bin/${b}"
+    done
+    hash -r 2>/dev/null || true
+    ok "  Node $(/usr/local/bin/node --version 2>/dev/null) 装好了"
+  else
+    warn "  Node 下载失败；pilot init 会因此失败"
+  fi
 }
 
 # ===========================================================================
