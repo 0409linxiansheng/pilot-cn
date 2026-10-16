@@ -88,6 +88,28 @@ for probe in GiteeProvider LocalProvider remote_ref_sha pilot_sid _switch_to_com
 done
 [[ "$missing" -eq 0 ]] || warn "有改动缺失，请人工检查后再提交"
 
+# ── 重新编译 admin 前端 ────────────────────────────────────────────────
+# 前端构建产物（admin/backend/static/*）被 .gitignore 忽略，升级只替换源码，
+# 因此补丁里的前端源码改动必须重新编译才能生效。
+log "重新编译 admin 前端（前端源码改动需重编译才生效）..."
+build_frontend() {
+  local rel="$1" label="$2"
+  local dir="$CN_ROOT/$rel"
+  [[ -f "$dir/package.json" ]] || return 0
+  log "  · 编译 $label"
+  if ( cd "$dir" \
+        && { [[ -d node_modules ]] || npm install --no-audit --no-fund; } \
+        && npm run build ) > "/tmp/_pn_build_${label}.log" 2>&1; then
+    log "    ✓ $label"
+  else
+    warn "    ✗ $label 编译失败，日志: /tmp/_pn_build_${label}.log"
+    warn "      手动执行: cd $rel && npm install && npm run build"
+  fi
+}
+build_frontend admin/frontend/dashboard    dashboard
+build_frontend admin/frontend/editor       editor
+build_frontend admin/frontend/in-app-embed in-app-embed
+
 log "完成。检查无误后提交："
 log "  git diff --stat"
 log "  git add -A && git commit -m 'chore: upgrade vendored pilot to ${TARGET}'"
