@@ -237,10 +237,29 @@ EOF
   # frappe 的前端构建用 yarn。corepack 默认从 yarnpkg.com 拉，国内很慢；
   # 优先用 npm 从国内源装（corepack 作为兜底）。
   if ! command -v yarn >/dev/null 2>&1; then
-    log "安装 yarn ${YARN_VERSION}（走 ${NPM_REGISTRY}）..."
-    npm install -g "yarn@${YARN_VERSION}" --registry="$NPM_REGISTRY" >/dev/null 2>&1 \
-      && ok "  yarn $(yarn --version 2>/dev/null) 已安装" \
-      || warn "  yarn 安装失败，前端构建可能受影响"
+    # 直接从 npm 源取 yarn 的 tarball 解开再软链。两条弯路都已验证走不通：
+    #   npm install -g yarn  —— npm 11 默认拦安装脚本（allowScripts），装完没有可执行
+    #                            文件，而且不报错（"changed 1 package" 但 /usr/local/bin 里没有 yarn）
+    #   corepack             —— shim 首次运行仍去 registry.yarnpkg.com 下载，
+    #                            COREPACK_NPM_REGISTRY / prepare --activate 都不改变这一点
+    log "安装 yarn ${YARN_VERSION}（直接取 npm 源的 tarball）..."
+    local yarn_tgz="/tmp/yarn-pilot-cn.tgz"
+    if curl -fsSL --max-time 180 "${NPM_REGISTRY}/yarn/-/yarn-${YARN_VERSION}.tgz" -o "$yarn_tgz"; then
+      rm -rf /usr/local/lib/node_modules/yarn
+      mkdir -p /usr/local/lib/node_modules/yarn
+      tar -xzf "$yarn_tgz" -C /usr/local/lib/node_modules/yarn --strip-components=1
+      chmod +x /usr/local/lib/node_modules/yarn/bin/yarn.js 2>/dev/null || true
+      ln -sf /usr/local/lib/node_modules/yarn/bin/yarn.js /usr/local/bin/yarn
+      ln -sf /usr/local/lib/node_modules/yarn/bin/yarn.js /usr/local/bin/yarnpkg
+      hash -r 2>/dev/null || true
+      if command -v yarn >/dev/null 2>&1; then
+        ok "  yarn $(yarn --version 2>/dev/null) 已安装"
+      else
+        warn "  yarn 软链失败，请检查 /usr/local/lib/node_modules/yarn"
+      fi
+    else
+      warn "  yarn 下载失败：${NPM_REGISTRY}/yarn/-/yarn-${YARN_VERSION}.tgz"
+    fi
   else
     ok "yarn 已存在（$(yarn --version 2>/dev/null)）"
   fi
