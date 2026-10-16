@@ -229,11 +229,18 @@ class AppRepository:
 
     @property
     def depth_flags(self) -> list[str]:
-        """Depth arguments for a clone or a single-ref fetch. Empty on a dev install,
-        where apps are checked out with their full history to work on."""
-        from pilot import is_dev_build
+        """Depth arguments for a clone or a single-ref fetch.
 
-        return [] if is_dev_build else ["--depth", "1"]
+        pilot-cn: upstream returns [] for a dev install so apps keep their full
+        history. Pulling frappe's whole history from Gitee runs at about 90KB/s
+        here and takes hours, so default to a shallow clone. Set
+        PILOT_CN_FULL_CLONE=1 to keep the upstream behaviour.
+        """
+        import os
+
+        if os.environ.get("PILOT_CN_FULL_CLONE") == "1":
+            return []
+        return ["--depth", "1"]
 
     @staticmethod
     def pack_threads() -> int:

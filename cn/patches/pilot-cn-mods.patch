@@ -312,10 +312,33 @@ index ab58c8b..a16a742 100644
  
          existing_clone = self.existing_clone_path
 diff --git a/pilot/core/app/repository.py b/pilot/core/app/repository.py
-index fc9895e..ca42d79 100644
+index fc9895e..85a6647 100644
 --- a/pilot/core/app/repository.py
 +++ b/pilot/core/app/repository.py
-@@ -295,14 +295,26 @@ class AppRepository:
+@@ -229,11 +229,18 @@ class AppRepository:
+ 
+     @property
+     def depth_flags(self) -> list[str]:
+-        """Depth arguments for a clone or a single-ref fetch. Empty on a dev install,
+-        where apps are checked out with their full history to work on."""
+-        from pilot import is_dev_build
++        """Depth arguments for a clone or a single-ref fetch.
+ 
+-        return [] if is_dev_build else ["--depth", "1"]
++        pilot-cn: upstream returns [] for a dev install so apps keep their full
++        history. Pulling frappe's whole history from Gitee runs at about 90KB/s
++        here and takes hours, so default to a shallow clone. Set
++        PILOT_CN_FULL_CLONE=1 to keep the upstream behaviour.
++        """
++        import os
++
++        if os.environ.get("PILOT_CN_FULL_CLONE") == "1":
++            return []
++        return ["--depth", "1"]
+ 
+     @staticmethod
+     def pack_threads() -> int:
+@@ -295,14 +302,26 @@ class AppRepository:
          self._sync_remote_url()
          # A named refspec creates origin/<branch> even in a single-branch clone.
          refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"

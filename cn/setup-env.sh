@@ -234,6 +234,17 @@ setup_git_rewrite() {
   # 让函数只写文件，再读回来。
   apply_dependency_route >/dev/null
   apply_repo_mirrors
+
+  # 大仓库（frappe 全量历史）经 Gitee 拉取时，HTTP/2 容易中途断流，表现为
+  #   RPC failed; curl 92 HTTP/2 stream ... PROTOCOL_ERROR / fatal: early EOF
+  # 改走 HTTP/1.1 并调大缓冲与低速容忍，写进 /etc/gitconfig（对所有用户生效）。
+  git config --system http.version HTTP/1.1 2>/dev/null \
+    || warn "  无法写入 /etc/gitconfig 的 http.version"
+  git config --system http.postBuffer 524288000 2>/dev/null || true
+  git config --system http.lowSpeedLimit 1000 2>/dev/null || true
+  git config --system http.lowSpeedTime 60 2>/dev/null || true
+  ok "git 传输参数已优化（HTTP/1.1 + 大缓冲；Gitee 拉大仓库不再中途断流）"
+
   CN_ROUTE="$(sed -n 's/^CN_FINAL_ROUTE=//p' "${CN_STATE_DIR}/route.env" | tail -1)"
   CN_CHOSEN_PROXY="$(sed -n 's/^CN_CHOSEN_PROXY=//p' "${CN_STATE_DIR}/route.env" | tail -1)"
 
