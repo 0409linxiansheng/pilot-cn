@@ -91,6 +91,11 @@ export const useMarketplace = (initialSiteName = '') => {
         currentSiteName.value =
           sites.value.find((site) => site.name === initialSiteName)?.name || ''
       }
+      // pilot-cn: 单站点 bench 下默认选中该站点，这样"导入应用"会连带安装到站点，
+      // 而不是只下载到 bench（与 InstallAppDialog 的 soleSite 行为一致）。
+      if (!currentSiteName.value && sites.value.length === 1) {
+        currentSiteName.value = sites.value[0].name
+      }
     } catch (caught) {
       error.value = (caught instanceof Error && caught.message) || 'Failed to load marketplace'
     } finally {

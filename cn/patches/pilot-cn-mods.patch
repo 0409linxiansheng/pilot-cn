@@ -134,6 +134,22 @@ index 6172163..368d415 100644
          token,
          max_age=24 * 3600,
          httponly=True,
+diff --git a/admin/frontend/dashboard/src/composables/apps/useMarketplace.ts b/admin/frontend/dashboard/src/composables/apps/useMarketplace.ts
+index f2886ed..c219f88 100644
+--- a/admin/frontend/dashboard/src/composables/apps/useMarketplace.ts
++++ b/admin/frontend/dashboard/src/composables/apps/useMarketplace.ts
+@@ -91,6 +91,11 @@ export const useMarketplace = (initialSiteName = '') => {
+         currentSiteName.value =
+           sites.value.find((site) => site.name === initialSiteName)?.name || ''
+       }
++      // pilot-cn: 单站点 bench 下默认选中该站点，这样"导入应用"会连带安装到站点，
++      // 而不是只下载到 bench（与 InstallAppDialog 的 soleSite 行为一致）。
++      if (!currentSiteName.value && sites.value.length === 1) {
++        currentSiteName.value = sites.value[0].name
++      }
+     } catch (caught) {
+       error.value = (caught instanceof Error && caught.message) || 'Failed to load marketplace'
+     } finally {
 diff --git a/pilot/core/app/__init__.py b/pilot/core/app/__init__.py
 index ab58c8b..a16a742 100644
 --- a/pilot/core/app/__init__.py
