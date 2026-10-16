@@ -474,9 +474,15 @@ setup_database_and_cache() {
       echo "deb [signed-by=/usr/share/keyrings/fluentbit-keyring.gpg] https://packages.fluentbit.io/ubuntu/noble noble main" \
         > /etc/apt/sources.list.d/fluent-bit.list
       apt-get update -qq 2>/dev/null || true
-      apt-get install -y -qq fluent-bit 2>/dev/null \
-        && ok "  fluent-bit 已安装（生产模式日志收集）" \
-        || warn "  fluent-bit 安装失败（只影响生产模式的日志收集）"
+      if apt-get install -y -qq fluent-bit 2>/dev/null; then
+        # fluent-bit 的 deb 装到 /opt/fluent-bit/bin，不在 PATH 里；
+        # Pilot 用 which("fluent-bit") 找它，不软链就等于没装。
+        ln -sf /opt/fluent-bit/bin/fluent-bit /usr/local/bin/fluent-bit 2>/dev/null || true
+        hash -r 2>/dev/null || true
+        ok "  fluent-bit $(/usr/local/bin/fluent-bit --version 2>/dev/null | head -1) 已安装"
+      else
+        warn "  fluent-bit 安装失败（只影响生产模式的日志收集）"
+      fi
     else
       warn "  fluent-bit 源不可达，跳过（只影响生产模式的日志收集）"
     fi
