@@ -793,6 +793,102 @@ bench.toml 里写的仍是 https://github.com/frappe/frappe
 
 ---
 
+### 以后想切换到生产模式：完整步骤
+
+#### 先搞清楚代价
+
+| | 开发模式（你现在） | 生产模式 |
+|---|---|---|
+| 服务托管 | `pilot start` 前台跑 | **systemd**（开机自启、崩了自动拉起） |
+| Web 入口 | Pilot 自带的开发服务器 | **nginx** |
+| 重启命令 | `pilot start` | `pilot -b main restart` |
+| Domains 配置界面 | ❌ 不显示 | ✅ 显示 |
+| 部署脚本 | `sudo cn/deploy.sh --restart` | 同一条命令（脚本会自动识别走 `pilot restart`） |
+
+**关键：生产模式会取代 `pilot start`。** 服务改由 systemd 托管，开机自启。
+
+#### 第 1 步：准备一个管理域名
+
+生产模式**必须**提供一个管理域名（面板的访问地址）。三选一：
+
+| 方案 | 填什么 | 前提 |
+|---|---|---|
+| **内网 IP**（最简单） | `192.168.1.102` | 无，立刻能用 |
+| 内网域名 | `admin.erp.local` | 加 hosts / 内网 DNS |
+| 公网域名 | `admin.example.com` | 域名 + DNS + 备案 + 路由器映射 80/443 |
+
+先确认域名能解析到本机：
+
+```bash
+getent hosts admin.erp.local      # 换成你选的域名
+```
+
+#### 第 2 步：备份（强烈建议）
+
+```bash
+pilot -b main frappe --site erp.local backup
+```
+
+#### 第 3 步：执行切换
+
+```bash
+sudo -u erpnext -H env XDG_RUNTIME_DIR=/run/user/1001 \
+  /home/erpnext/pilot/bin/pilot -b main setup production \
+  --admin-domain 192.168.1.102
+```
+
+它会依次做这些：
+
+```
+切换进程管理器（dev → systemd）
+  → 启动生产服务（systemd units）
+  → 生成并加载 nginx 配置
+  → （加了 --tls 时）申请 Let's Encrypt 证书
+  → 构建生产版管理面板
+  → 装监控与日志收集
+  → 把 production.enabled = true 写进 bench.toml
+```
+
+**关于 HTTPS**：不加 `--tls` 就是纯 HTTP，内网够用。要 HTTPS 就加：
+
+```bash
+... --admin-domain admin.example.com --tls --letsencrypt-email you@example.com
+```
+
+⚠️ 国内未备案的域名 80 端口会被运营商拦，`--tls` 必然失败。这种情况请用云厂商证书手动放置。
+
+#### 第 4 步：验证
+
+```bash
+# 服务是否起来
+systemctl --user list-units --no-pager | grep -i pilot
+# nginx 配置是否正确
+sudo nginx -t
+# 面板是否能访问
+curl -I http://192.168.1.102:7000
+```
+
+#### 第 5 步：以后怎么重启 / 部署
+
+```bash
+# 重启生产服务
+pilot -b main restart
+
+# 改完代码后部署（deploy.sh 会自动识别生产模式）
+sudo cn/deploy.sh --restart
+```
+
+#### 想退回来（回到开发模式）
+
+```bash
+pilot -b main remove production    # 移除生产部署（保留日志、证书、管理域名）
+pilot -b main start                # 回到开发模式
+```
+
+`remove production` 会把 `production.enabled` 改回 `false`，并清掉 systemd units 和 nginx 配置。
+
+---
+
 ## 十二、升级与回滚
 
 这是 Pilot 相对于"自己写脚本部署"最大的优势，**必须保留**。

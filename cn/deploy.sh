@@ -72,10 +72,29 @@ chown -R "$OWNER" "$TARGET/pilot" "$TARGET/admin" "$TARGET/cn" "$TARGET/config" 
 log "清理 __pycache__"
 find "$TARGET" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 
+# 生产模式下服务由 systemd 托管，pilot start 不适用，要用 pilot restart。
+is_production() {
+  local toml="$TARGET/benches/$BENCH/bench.toml"
+  [[ -f "$toml" ]] || return 1
+  sed -n '/^\[production\]/,/^\[/p' "$toml" 2>/dev/null \
+    | grep -qE '^[[:space:]]*enabled[[:space:]]*=[[:space:]]*true'
+}
+
 if [[ "$RESTART" -eq 1 ]]; then
   RUN_USER="${OWNER%%:*}"
   # runuser 从 root 降权不会像嵌套 sudo 那样等待密码或 tty
   as_user() { runuser -u "$RUN_USER" -- "$@"; }
+
+  if is_production; then
+    log "检测到生产模式（systemd + nginx），用 pilot restart ..."
+    as_user env XDG_RUNTIME_DIR="$RUNTIME" "$TARGET/bin/pilot" -b "$BENCH" restart \
+      || warn "pilot restart 失败，请手动检查 systemctl 状态"
+    sleep 8
+    log "端口检查："
+    ss -tlnH 2>/dev/null | grep -E ':7000|:8000|:11000|:13000' | awk '{print "  " $4}' || true
+    log "完成。"
+    exit 0
+  fi
 
   log "停止 bench '$BENCH' ..."
   pkill -u "$RUN_USER" -f "bin/pilot -b $BENCH start" 2>/dev/null || true
