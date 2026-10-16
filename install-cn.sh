@@ -187,8 +187,24 @@ create_run_user() {
     warn "系统没有 loginctl；Pilot 的 bench 服务需要 systemd 用户会话"
   fi
 
+  configure_run_user_registries
   grant_caller_access
   log "运行用户：$RUN_USER（$(getent passwd "$RUN_USER" | cut -d: -f6)）"
+}
+
+# 把 npm / yarn 的国内源写进运行用户的家目录。
+# 只写 /etc/npmrc 与 /etc/yarnrc 是无效的：yarn 不读 /etc/yarnrc，npm 的全局配置在
+# $PREFIX/etc/npmrc 而不是 /etc/npmrc —— 实测运行用户仍会去 registry.npmjs.org 拉包，
+# 比 npmmirror 慢约 9 倍（1.1MB/s vs 127KB/s）。
+configure_run_user_registries() {
+  local rhome
+  rhome="$(getent passwd "$RUN_USER" | cut -d: -f6)"
+  [[ -n "$rhome" && -d "$rhome" ]] || return 0
+
+  printf 'registry=%s\n' "$NPM_REGISTRY" > "${rhome}/.npmrc"
+  printf 'registry "%s"\ndisturl "%s"\n' "$NPM_REGISTRY" "$NODE_BINARY_MIRROR" > "${rhome}/.yarnrc"
+  chown "$RUN_USER:$RUN_USER" "${rhome}/.npmrc" "${rhome}/.yarnrc" 2>/dev/null || true
+  ok "已为 $RUN_USER 配置 npm/yarn 国内源（~/.npmrc + ~/.yarnrc）"
 }
 
 # 让发起安装的人（SSH 登录用户）能在 VSCode 里浏览运行用户的家目录。
