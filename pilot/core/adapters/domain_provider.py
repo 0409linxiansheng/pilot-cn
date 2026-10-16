@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import ipaddress
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -13,6 +14,29 @@ from pilot.config.route import RoutePolicy
 from pilot.exceptions import BenchError, DomainConflictError, DomainProviderError
 from pilot.managers.platform import which
 from pilot.utils import host_owner, normalize_host, write_private_text
+
+# pilot-cn：公网 IP 回显服务。国内很多机器是 NAT（接口上只有内网 IP），必须靠外部
+# 服务才能拿到公网 IP；而默认的 ifconfig.me 在国内不可达，会导致"域名没指过来"误报。
+# 可用 PILOT_CN_IP_PROBE_URLS（逗号分隔）覆盖。
+_IP_PROBE_URLS = tuple(
+    url.strip() for url in os.environ.get("PILOT_CN_IP_PROBE_URLS", "").split(",") if url.strip()
+) or (
+    "https://ip.3322.net",
+    "https://ipv4.icanhazip.com",
+    "https://4.ident.me",
+)
+
+
+def _extract_ipv4(text: str) -> str:
+    """First IPv4 token in an IP-echo response (some services return prose)."""
+    for token in text.replace("：", " ").split():
+        try:
+            if ipaddress.ip_address(token).version == 4:
+                return token
+        except ValueError:
+            continue
+    return ""
+
 
 if TYPE_CHECKING:
     from pilot.core.bench import Bench
@@ -239,11 +263,14 @@ class DomainRouteProvider:
         except OSError:
             pass
 
-        try:
-            with urllib.request.urlopen("https://ifconfig.me/ip", timeout=3) as resp:
-                return resp.read().decode().strip()
-        except OSError:
-            return ""
+        for url in _IP_PROBE_URLS:
+            try:
+                with urllib.request.urlopen(url, timeout=3) as resp:
+                    if ip := _extract_ipv4(resp.read().decode(errors="replace")):
+                        return ip
+            except OSError:
+                continue
+        return ""
 
     @staticmethod
     def _resolve(host: str) -> set[str]:
