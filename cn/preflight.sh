@@ -274,7 +274,9 @@ check_runtime() {
 
   # 公网 IP 探测：pilot-cn 已把端点换成国内可达服务（上游用 8.8.8.8 + ifconfig.me，
   # 后者在国内要么不通、要么返回 IPv6，导致配域名时误报"域名没指过来"）
-  local ip_probe="${PILOT_CN_IP_PROBE_URLS%%,*}"
+  # 注意 set -u：未定义变量直接报错，所以先给默认值再取第一个
+  local probes="${PILOT_CN_IP_PROBE_URLS:-https://ip.3322.net,https://ipv4.icanhazip.com}"
+  local ip_probe="${probes%%,*}"
   ip_probe="${ip_probe:-https://ip.3322.net}"
   local got_ip
   got_ip="$(curl -fsS --max-time 8 "$ip_probe" 2>/dev/null | tr -d '[:space:]' | head -c 40)"
