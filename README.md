@@ -363,6 +363,7 @@ Pilot 的迁移链会自动执行：
 | 8 | 隐藏 Cloud Settings（自建环境用不到 Frappe Cloud） | `admin/backend/api/v1/auth.py`、`middleware.py` |
 | 9 | **上游升级机制**：补丁 + 重放脚本 + 升级后自动重编译前端 | `cn/upgrade.sh`、`cn/patches/` |
 | 10 | 部署脚本：源码 → 运行实例一键同步（含前端产物） | `cn/deploy.sh` |
+| 11 | **公网 IP 探测改用国内可达服务**：NAT 机器 + 国内环境下不再误报「域名没指过来」 | `pilot/core/adapters/domain_provider.py` |
 
 ### 未实现（🔧）
 
@@ -371,10 +372,9 @@ Pilot 的迁移链会自动执行：
 | 1 | `pilot doctor` 预检子命令 | 已有独立脚本 `cn/preflight.sh`，未接进 CLI |
 | 2 | 证书目录可配置（`cert_dir`） | 未做。国内用云厂商证书，目前仍走 Let's Encrypt 路径 |
 | 3 | `--no-takeover`（不接管机器上已有的 MariaDB / Redis / nginx） | 未做 |
-| 4 | 公网 IP 探测端点可配置 | 未做（仍用 `8.8.8.8`，国内不通会误报域名） |
-| 5 | S3 备份增加国内厂商 | 未做 |
-| 6 | `install.sh` 国产系统适配（麒麟 / 统信 / openEuler） | 未做（目前只验证过 Ubuntu 24.04） |
-| 7 | 网页里加预检页 | 未做 |
+| 4 | S3 备份增加国内厂商 | 未做 |
+| 5 | `install.sh` 国产系统适配（麒麟 / 统信 / openEuler） | 未做（目前只验证过 Ubuntu 24.04） |
+| 6 | 网页里加预检页 | 未做 |
 
 ### 明确不做的事
 
