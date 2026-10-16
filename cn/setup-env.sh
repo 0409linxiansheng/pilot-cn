@@ -345,6 +345,48 @@ revert_all() {
 }
 
 # ===========================================================================
+# 8. 数据库与缓存
+# ===========================================================================
+setup_database_and_cache() {
+  export DEBIAN_FRONTEND=noninteractive
+
+  # --- MariaDB：frappe v16 要求 11.8，发行版自带的是 10.11 ---
+  # Pilot 在 Linux 上不自己装数据库（它会直接报错让你跑 install.sh），必须这里装好。
+  local repo_file=/etc/apt/sources.list.d/mariadb.list
+  local keyring=/usr/share/keyrings/mariadb-keyring.gpg
+  if [[ ! -f "$repo_file" ]]; then
+    log "配置 MariaDB ${MARIADB_VERSION} 国内源..."
+    local key_url got_key=0
+    for key_url in "${MARIADB_KEY_URLS[@]}"; do
+      if curl -fsSL --max-time 25 "$key_url" -o /tmp/mariadb-release.asc 2>/dev/null \
+         && gpg --dearmor < /tmp/mariadb-release.asc > "$keyring" 2>/dev/null; then
+        got_key=1
+        break
+      fi
+      warn "  密钥源不可用：$key_url"
+    done
+    if [[ "$got_key" -eq 1 ]]; then
+      echo "deb [signed-by=${keyring}] ${MARIADB_REPO} ${MARIADB_REPO_CODENAME} main" > "$repo_file"
+      ok "  MariaDB 源已写入 $repo_file"
+    else
+      warn "  MariaDB 签名密钥全部获取失败，改用发行版自带的 MariaDB（版本可能不满足 ${MARIADB_VERSION}）"
+    fi
+  else
+    log "MariaDB 源已存在，跳过"
+  fi
+
+  apt-get update -qq || warn "apt-get update 有告警，继续"
+
+  # --- redis：Pilot 需要 redis-server，但它自己装不了（要免密 sudo）---
+  log "安装数据库与缓存（MariaDB ${MARIADB_VERSION} + Redis）..."
+  apt-get install -y -qq mariadb-server mariadb-client redis-server \
+    || die "数据库/缓存安装失败"
+
+  ok "MariaDB $(mariadb --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1) · Redis $(redis-server --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+  warn "运行用户的 systemd 会话（linger）由 install-cn.sh 在建用户时开启"
+}
+
+# ===========================================================================
 # 主流程
 # ===========================================================================
 main() {
@@ -371,6 +413,7 @@ main() {
   run_section 5 "git 地址改写"        setup_git_rewrite
   run_section 6 "代理渗透"            setup_proxy
   run_section 7 "swap 与时区"         setup_swap_timezone
+  run_section 8 "数据库与缓存"          setup_database_and_cache
 
   date -Is > "$CN_STAGE_MARKER"
 

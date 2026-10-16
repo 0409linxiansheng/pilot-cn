@@ -174,6 +174,19 @@ create_run_user() {
       && ok "已设置 $RUN_USER 的登录密码（见下方登录凭据）"
   fi
 
+  # systemd 用户会话：Pilot 的 bench 服务（per-user MariaDB / Redis / 进程管理）
+  # 全部跑在 systemctl --user 里。没有 linger 就没有 /run/user/<uid>，Pilot 会报
+  # "Failed to connect to bus: No such file or directory"，init 直接失败。
+  if command -v loginctl >/dev/null 2>&1; then
+    if loginctl enable-linger "$RUN_USER" 2>/dev/null; then
+      ok "已为 $RUN_USER 开启 linger（systemd 用户服务可用）"
+    else
+      warn "开启 linger 失败；Pilot 可能起不来 per-user 服务"
+    fi
+  else
+    warn "系统没有 loginctl；Pilot 的 bench 服务需要 systemd 用户会话"
+  fi
+
   grant_caller_access
   log "运行用户：$RUN_USER（$(getent passwd "$RUN_USER" | cut -d: -f6)）"
 }

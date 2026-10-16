@@ -272,16 +272,42 @@ check_runtime() {
     report_red "PDF 引擎" "wkhtmltopdf 与 chromium 都没有，报表/发票打印会失败（不阻塞安装）"
   fi
 
-  # 公网 IP 探测：Pilot 内部用 8.8.8.8，国内不通 → 配域名时误报"域名没指过来"
-  if timeout 5 bash -c 'exec 3<>/dev/tcp/8.8.8.8/53' 2>/dev/null; then
-    report_ok "公网 IP 探测端点" "8.8.8.8 可达"
+  # 公网 IP 探测：pilot-cn 已把端点换成国内可达服务（上游用 8.8.8.8 + ifconfig.me，
+  # 后者在国内要么不通、要么返回 IPv6，导致配域名时误报"域名没指过来"）
+  local ip_probe="${PILOT_CN_IP_PROBE_URLS%%,*}"
+  ip_probe="${ip_probe:-https://ip.3322.net}"
+  local got_ip
+  got_ip="$(curl -fsS --max-time 8 "$ip_probe" 2>/dev/null | tr -d '[:space:]' | head -c 40)"
+  if [[ -n "$got_ip" ]]; then
+    report_ok "公网 IP 探测" "${ip_probe} → ${got_ip}"
   else
-    report_red "公网 IP 探测端点" "8.8.8.8 不可达；配域名时会误报，需要用 pilot-cn 的探测端点覆盖"
+    report_yellow "公网 IP 探测" "${ip_probe} 不可达；配域名时 A 记录建议可能为空（不阻塞安装）"
   fi
 
-  # systemd 用户服务：Pilot 的 bench 服务跑在 systemctl --user 里
+  # 数据库与缓存：Pilot 在 Linux 上不自己装 MariaDB/Redis（它要免密 sudo），
+  # 上游靠 install.sh 装；pilot-cn 由环境层第 8 节负责，漏了就会 init 失败
+  local pkg missing=()
+  for pkg in mariadb-server redis-server; do
+    dpkg -l 2>/dev/null | grep -q "^ii  $pkg " || missing+=("$pkg")
+  done
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    report_ok "数据库与缓存" "mariadb-server / redis-server 已安装"
+  else
+    report_green "数据库与缓存" "缺 ${missing[*]}；环境层第 8 节会安装"
+  fi
+
+  # systemd 用户服务：Pilot 的 bench 服务（per-user MariaDB / Redis / 进程管理）
+  # 全跑在 systemctl --user 里。光有 loginctl 不够 —— 运行用户必须开 linger，
+  # 否则没有 /run/user/<uid>，pilot init 会直接失败（Failed to connect to bus）
   if [[ -d /run/systemd/system ]] && command -v loginctl >/dev/null 2>&1; then
-    report_ok "systemd 用户服务" "可用"
+    local ru="${RUN_USER:-erpnext}"
+    if ! id "$ru" >/dev/null 2>&1; then
+      report_green "systemd 用户服务" "运行用户 $ru 尚未创建；建用户时会自动开启 linger"
+    elif [[ "$(loginctl show-user "$ru" -p Linger --value 2>/dev/null)" == "yes" ]]; then
+      report_ok "systemd 用户服务" "$ru 已开启 linger"
+    else
+      report_green "systemd 用户服务" "$ru 未开启 linger；建用户时会执行 loginctl enable-linger $ru"
+    fi
   else
     report_block "systemd 用户服务" "不可用（容器或裁剪系统）；Pilot 的 bench 服务依赖 systemctl --user"
   fi
