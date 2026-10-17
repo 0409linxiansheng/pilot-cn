@@ -5,7 +5,7 @@
 `pilot-cn-mods.patch` 记录了 **pilot-cn 对上游 Pilot 源码的全部改动**，用于"上游升级后自动重放"。
 
 - **基线**：上游 `v0.0.64-pre-alpha`（pilot-cn 的初始提交就是它的 pristine 副本）
-- **覆盖**：`pilot/` 与 `admin/` 下的 10 个文件
+- **覆盖**：`pilot/` 与 `admin/` 下的 29 个文件
 - **不包含**：我们自己的层（`cn/`、`config/`、`install-cn.sh`）——上游没有这些文件，永远不会被升级覆盖
 
 ## 补丁内容
@@ -22,6 +22,17 @@
 | `admin/backend/middleware.py` | 面板 cookie `sid` → `pilot_sid`（避免与 Frappe 冲突） |
 | `admin/backend/api/v1/auth.py` | 同上（登出删除对应 cookie） |
 | `admin/backend/api/v1/git.py` | Gitee / 本地路径支持 |
+| `pilot/integrations/git/refs.py` | 新增：`git ls-remote --heads --tags` 列分支和 tag（向导的分支/版本列表，带缓存与降级） |
+| `pilot/config/bench.py` | `framework_app` 按 `name = "frappe"` 取，不看列表顺序；`app_repo/app_branch` 写回同一条 |
+| `admin/backend/api/v1/setup/config.py` | 向导预填直接读 bench.toml 里 frappe 的 `[[apps]]` 条目（半残配置也能预填） |
+| `admin/backend/api/v1/setup/__init__.py` | `/setup/framework-branches` 返回远端 heads + tags，失败退回内置列表 |
+| `admin/backend/api/v1/core.py` | bench 已初始化时清理失败向导残留的 `.wizard-active` |
+| `admin/backend/api/v1/sites/core.py` | 面板站点地址 / 一键登录用「访问面板的地址」（单站点固定时） |
+| `pilot/core/bench/config_files.py` | 单站点自动写 `default_site`（≈ `bench use`），多站点自动去掉 |
+| `pilot/core/bench/runtime.py` | Python 依赖统一走 `install_app`；重建资产后重启 web |
+| `pilot/core/site/login.py`、`pilot/core/site/__init__.py` | 站点 URL / 登录链接支持 `dev_host`，单站点时用面板地址 |
+| `pilot/tasks/new_site.py` | 建站后同步 `default_site` 并重启 web，站点立刻可访问 |
+| `pilot/managers/environment.py` | 应用 `dev` extra 解析失败时降级为不带 extra 安装（frappe 的 pypika 冲突） |
 
 ## 怎么用
 

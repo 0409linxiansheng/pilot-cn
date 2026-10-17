@@ -100,10 +100,27 @@ sudo bash install-cn.sh
 
 | 选项 | 作用 |
 |---|---|
+| `--gui` | **只装到 Pilot + 一个未初始化的 bench**，剩下的在面板向导里选（见下节） |
 | `--skip-preflight` | 跳过环境预检 |
 | `--skip-env` | 跳过环境层配置（已经配好了） |
 | `--skip-bench` | 只装 Pilot，不建 bench / 站点 |
 | `--bench-user USER` | 换运行用户（默认 `erpnext`） |
+
+### 想用面板向导装：`--gui`
+
+不想在命令行里定死版本，就装到一半交给面板：
+
+```bash
+sudo bash install-cn.sh --gui
+```
+
+装完打开 `http://<IP>:7000`，向导里选三件事：
+
+1. **数据库**：引擎（MariaDB / PostgreSQL）和连接方式（新建 / 复用本机 / 外部）；
+2. **Frappe 仓库**：默认已预填 `mirrors.conf` 里配的地址（Gitee 镜像），也可以粘任意 Git 地址；
+3. **Frappe 分支或 tag**：列表**直接来自该仓库**（`git ls-remote` 的 heads + tags），所以能选到 `v16.51.0` 这种发布版本。
+
+初始化完成后回到面板：建站点、装应用。**单站点 bench 会自动固定站点**，所以建完站点就能用 `http://<IP>:8000` 打开，不需要改 hosts。
 
 ### 装之前想改配置：只改一个文件
 
@@ -151,6 +168,13 @@ sudo bash install-cn.sh
 | **ERPNext** | `http://192.168.1.102:8000` | 日常业务，员工用这个 |
 | **ERPNext 账号** | `Administrator` | 密码见下方 |
 | **Pilot 管理面板** | `http://192.168.1.102:7000` | 装应用 / 备份 / 看日志 / 改配置 |
+
+> **用 IP 直接能打开，不用改 hosts。**
+> Frappe 默认按请求的 `Host` 头选站点，所以直接开 `http://<IP>:8000` 本来会 404（`<IP> does not exist`）。
+> Pilot 国内版做了两件事：**bench 里只有一个站点时，自动把它固定为默认站点**（等价于 frappe 的 `bench use`），
+> 于是任何 Host 都落到它；面板里的「打开站点 / 一键登录」也会用**你访问面板时的那个地址**，点开就是 desk。
+>
+> 只有在建了**第二个**站点之后，才需要给每个站点配域名（或临时加 hosts）——多站点必须靠 Host 区分，这是 Frappe 的机制。
 
 ### 四个密码
 
@@ -493,7 +517,7 @@ git push gitee main                                          # Gitee
 
 ## 七、我们在官方基础上改了什么
 
-全部源码改动 = **17 个文件**，集中在 `cn/patches/pilot-cn-mods.patch`。
+全部源码改动 = **29 个文件**，集中在 `cn/patches/pilot-cn-mods.patch`（改了源码记得按[第六节](#六改了代码之后怎么升级和部署)重新生成）。
 
 ### 已实现
 
@@ -512,6 +536,13 @@ git push gitee main                                          # Gitee
 | 11 | **上游升级机制**：补丁 + 重放脚本 + 升级后自动重编译前端 | `cn/upgrade.sh`、`cn/patches/` |
 | 12 | **部署脚本**：源码 → 运行实例一键同步（含前端产物） | `cn/deploy.sh` |
 | 13 | 安装脚本给运行用户设密码 + 给安装者授权（VSCode 能看文件） | `install-cn.sh`、`cn/lib/core.sh` |
+| 14 | **向导预填读真实的 bench.toml**：仓库/分支取 `name = "frappe"` 那条 `[[apps]]`（以前取第一条），配置写坏也仍然能预填 | `admin/backend/api/v1/setup/config.py`、`pilot/config/bench.py` |
+| 15 | **向导分支列表带 tag**：`git ls-remote --heads --tags`（走 git 改写通道，不碰 api.github.com，拉不到时退回内置列表），只列版本类 ref、缓存 10 分钟 | `pilot/integrations/git/refs.py`、`admin/backend/api/v1/setup/__init__.py` |
+| 16 | **单站点 bench 自动固定站点**（`default_site`）：`http://<IP>:8000` 直接可用，不用改 hosts；面板的站点地址 / 一键登录用访问面板的地址；建站后立即生效 | `pilot/core/bench/config_files.py`、`pilot/core/site/login.py`、`pilot/tasks/new_site.py` |
+| 17 | **装/更新应用构建完资产后重启 web**：旧资产清单被缓存时，页面里 hash 化的 js/css 会全部 404（表现为登录后白屏） | `pilot/core/app/__init__.py`、`pilot/core/bench/runtime.py` |
+| 18 | **服务器 bench 默认关掉常驻 JS 监听**（`watch_apps_js=false`）：它会在 web 读过资产清单后再换一遍 hash，还常驻占 CPU | `install-cn.sh`、`cn/install-bench.sh`、`cn/lib/core.sh` |
+| 19 | **应用 `dev` extra 解析失败时降级安装**：frappe 把 pypika 钉在 fork 上，和它自己的 `pypika-stubs` 冲突，不能因此中断 init | `pilot/managers/environment.py` |
+| 20 | **向导失败后残留的 `.wizard-active` 自动清理**：bench 已初始化时不再把用户推回向导 | `admin/backend/api/v1/core.py` |
 
 ### 还没做
 
@@ -596,6 +627,14 @@ export PILOT_CN_IP_PROBE_URLS="https://你的服务/ip,https://ip.3322.net"
 ### 报错 "command not found: bench"
 
 Pilot 取代了 `bench`。所有命令改成 `pilot -b main ...`，详见[第四节](#四终端里怎么用)。
+
+### 用 IP 打开显示「xxx does not exist」/ 登录后白屏
+
+这两种都是**路由**和**前端资产**的问题，新版已经自动处理：
+
+- **`192.168.1.102 does not exist`**：Frappe 按请求的 `Host` 头选站点。单站点 bench 现在会自动把唯一站点固定为默认站点（`common_site_config.json` 里的 `default_site`），`http://<IP>:8000` 直接可用。如果这个键被手动删掉，重启一次 `pilot -b main start` 会重新写上。
+- **能登录但页面空白、浏览器控制台一堆 404**：浏览器缓存了旧页面的 hash 资源名。先 `Ctrl+F5` 强刷；仍不行就 `pilot -b main stop && pilot -b main start` 重启一次（新版装应用后会自动重启 web，正常不会出现）。
+- **建了第二个站点之后打不开**：多站点只能靠 Host / 域名区分，给每个站点配域名，或临时在客户端 hosts 里加一行；单站点不受影响。
 
 ### 忘了密码
 
@@ -937,6 +976,7 @@ git diff upstream-base -- pilot/ admin/ ':(exclude)admin/frontend/in-app-embed/d
 6. **wkhtmltopdf 版本**：apt 版不是 patched-qt 构建，复杂打印格式可能异常。打印中文 PDF 需要系统装中文字体（安装脚本已自动装 `fonts-noto-cjk`）。
 7. **域名备案**：国内服务器用域名对外提供服务必须备案，否则 80 端口被运营商拦，自动申请 HTTPS 证书必然失败——这也是为什么证书要支持手动放置。
 8. **应用兼容性**：部分第三方应用（如 helpdesk 1.31）前端依赖的 `frappe-ui` 版本与很新的 frappe（v16.51）不匹配，构建会失败。这属于上游版本漂移，不是 pilot-cn 的问题。
+9. **多站点靠 Host 区分**：一个 bench 只有一个站点时，Pilot 把它固定为默认站点，`http://<IP>:8000` 直接可用；一旦有第二个站点，就必须给每个站点配域名（或客户端 hosts），因为 HTTP 请求里只有 Host 头能说明"要访问哪个站"。
 
 ---
 
