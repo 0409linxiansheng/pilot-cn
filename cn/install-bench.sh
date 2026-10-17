@@ -88,7 +88,7 @@ create_bench() {
   fi
 
   # 必须在 pilot init 之前：把 frappe 分支钉成配置里的版本
-  pin_framework_branch
+  configure_framework_app
 
   # 必须在 pilot init 之前：让数据库用强密码而不是默认的 root
   write_db_config
@@ -107,7 +107,7 @@ create_bench() {
 # 新的版本：实测配置写 v16.51.0，装出来是 v16.52.0。
 # 必须在 pilot init 之前改，因为 init 就是按 bench.toml 里的分支去克隆的。
 # ---------------------------------------------------------------------------
-pin_framework_branch() {
+configure_framework_app() {
   local toml="${BENCH_DIR}/bench.toml"
   [[ -f "$toml" ]] || return 0
   [[ -n "${FRAPPE_BRANCH:-}" ]] || return 0
@@ -208,7 +208,7 @@ install_apps() {
     log "erpnext 源码已在 bench 中，跳过 get-app"
   else
     log "安装 erpnext（源码经 insteadOf 走镜像）"
-    pilot -b "$BENCH_NAME" get-app "https://github.com/frappe/erpnext" --branch "$ERPNEXT_BRANCH" || die "get-app erpnext 失败"
+    pilot -b "$BENCH_NAME" get-app "${ERPNEXT_REPO:-https://github.com/frappe/erpnext}" --branch "$ERPNEXT_BRANCH" || die "get-app erpnext 失败"
   fi
   # 第二步：启动 bench（install-app 的数据库迁移需要 Redis Queue 11000 在线）
   ensure_bench_running || die "bench 未能在 90 秒内启动，install-app 无法继续"

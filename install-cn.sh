@@ -32,6 +32,7 @@ PILOT_BRANCH="${PILOT_BRANCH:-main}"
 SKIP_PREFLIGHT=0
 SKIP_ENV=0
 SKIP_BENCH=0
+GUI_MODE=0
 BENCH_USER_OVERRIDE=""
 
 # ---------------------------------------------------------------------------
@@ -117,7 +118,9 @@ main() {
   vendor_pilot "$pilot_dir"
 
   # ---- 阶段 6：建 bench + 站点（以运行用户执行）----
-  if [[ "$SKIP_BENCH" -ne 1 ]]; then
+  if [[ "$GUI_MODE" -eq 1 ]]; then
+    gui_setup "$RUN_USER" "$pilot_dir"
+  elif [[ "$SKIP_BENCH" -ne 1 ]]; then
     sudo -u "$RUN_USER" -H \
       env PILOT_HOME="$pilot_dir" \
           SITE_ADMIN_PASSWORD="$SITE_ADMIN_PASSWORD" \
@@ -132,8 +135,8 @@ main() {
   # ---- 阶段 7：验收（确认真的装好了，而不是只看"下一步"提示）----
   if [[ "${AUTO_VERIFY:-1}" -ne 1 ]]; then
     warn "已按 AUTO_VERIFY=0 跳过验收"
-  elif [[ "$SKIP_BENCH" -eq 1 ]]; then
-    log "只装 Pilot 模式，跳过验收"
+  elif [[ "$SKIP_BENCH" -eq 1 || "$GUI_MODE" -eq 1 ]]; then
+    log "只装 Pilot / GUI 模式，跳过站点验收"
   else
     verify_install "$RUN_USER" "$pilot_dir" || warn "验收有异常项，请看上面的逐项结果"
   fi
@@ -148,6 +151,93 @@ main() {
     ok "下一步启动： sudo -u $RUN_USER -H bash -lc 'cd $pilot_dir && bin/pilot -b $BENCH_NAME start'"
     print_login_credentials
   fi
+}
+
+# ---------------------------------------------------------------------------
+# GUI 模式：只把环境 + Pilot 准备好，建一个【未初始化】的 bench 并启动。
+# 面板检测到 bench 未初始化会自动进入安装向导，用户可以在界面上自由选择：
+#   · 数据库引擎与连接方式
+#   · Frappe 仓库（GitHub / Gitee / 任意 Git 地址）
+#   · Frappe 分支或 tag（列表来自你填的那个仓库）
+# 向导的默认值取自 bench.toml 里 frappe 那条 [[apps]]，所以先预填成国内友好的值。
+# ---------------------------------------------------------------------------
+gui_setup() {
+  local run_user="$1" pilot_dir="$2"
+  local run_uid bench_dir i ip
+  run_uid="$(id -u "$run_user")"
+  bench_dir="${pilot_dir}/benches/${BENCH_NAME}"
+
+  banner "准备面板安装向导（--gui）"
+
+  if [[ -f "${bench_dir}/bench.toml" ]]; then
+    log "bench ${BENCH_NAME} 已存在，跳过 pilot new"
+  else
+    log "创建 bench ${BENCH_NAME}（不初始化，留给面板向导）"
+    sudo -u "$run_user" -H env \
+      XDG_RUNTIME_DIR="/run/user/${run_uid}" \
+      PATH="/usr/local/bin:/usr/bin:/bin:${pilot_dir}/bin" \
+      "${pilot_dir}/bin/pilot" new "$BENCH_NAME" --admin-password "$PILOT_ADMIN_PASSWORD" \
+      || die "pilot new 失败"
+  fi
+
+  prefill_framework_defaults "${bench_dir}/bench.toml"
+
+  log "启动 Pilot（未初始化的 bench 会自动进入安装向导）"
+  sudo -u "$run_user" -H env XDG_RUNTIME_DIR="/run/user/${run_uid}" \
+    bash -c "cd '${pilot_dir}' && setsid nohup ./bin/pilot -b '${BENCH_NAME}' start \
+      > 'benches/${BENCH_NAME}/bench-start.log' 2>&1 < /dev/null &" \
+    > /dev/null 2>&1 < /dev/null
+
+  for i in $(seq 1 30); do
+    sleep 2
+    ss -tlnH "sport = :7000" 2>/dev/null | grep -q . && break
+  done
+
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  if ss -tlnH "sport = :7000" 2>/dev/null | grep -q .; then
+    ok "面板已就绪：http://${ip}:7000"
+    printf '\n  打开上面的地址，在向导里选：\n'
+    printf '    · 数据库引擎与连接方式\n'
+    printf '    · Frappe 仓库（已预填 %s）\n' "${FRAPPE_REPO:-官方 GitHub}"
+    printf '    · Frappe 分支/版本（已预填 %s）\n' "${FRAPPE_BRANCH:-默认分支}"
+    printf '\n  选 GitHub 也能装通：环境层已把 github.com 改写到国内可达的代理。\n\n'
+  else
+    warn "面板 60 秒内没起来，请看 ${bench_dir}/bench-start.log"
+  fi
+}
+
+# 把 mirrors.conf 的仓库与版本预填进 bench.toml 的 frappe 条目，
+# 向导打开时默认就是国内友好的选择（用户仍可改成 GitHub 或别的版本）。
+prefill_framework_defaults() {
+  local toml="$1"
+  [[ -f "$toml" ]] || return 0
+  local repo="${FRAPPE_REPO:-}" branch="${FRAPPE_BRANCH:-}"
+  [[ -n "$repo$branch" ]] || return 0
+
+  python3 - "$toml" "$repo" "$branch" <<'PY' || warn "预填向导默认值失败"
+import sys
+path, repo, branch = sys.argv[1], sys.argv[2], sys.argv[3]
+lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+in_app = False
+seen = []
+for i, line in enumerate(lines):
+    s = line.strip()
+    if s.startswith("[[apps]]"):
+        in_app = False
+    elif s == 'name = "frappe"':
+        in_app = True
+    elif in_app and (s.startswith("repo =") or s.startswith("branch =")):
+        indent = line[: len(line) - len(line.lstrip())]
+        key = s.split("=", 1)[0].strip()
+        val = repo if key == "repo" else branch
+        if val:
+            lines[i] = f'{indent}{key} = "{val}"\n'
+            seen.append(f"{key}={val}")
+if seen:
+    open(path, "w", encoding="utf-8").write("".join(lines))
+    print("  预填: " + ", ".join(seen))
+PY
+  ok "向导默认值已预填"
 }
 
 # ---------------------------------------------------------------------------
