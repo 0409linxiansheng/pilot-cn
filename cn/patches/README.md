@@ -5,7 +5,7 @@
 `pilot-cn-mods.patch` 记录了 **pilot-cn 对上游 Pilot 源码的全部改动**，用于"上游升级后自动重放"。
 
 - **基线**：上游 `v0.0.64-pre-alpha`（pilot-cn 的初始提交就是它的 pristine 副本）
-- **覆盖**：`pilot/` 与 `admin/` 下的 29 个文件
+- **覆盖**：`pilot/` 与 `admin/` 下的 30 个文件
 - **不包含**：我们自己的层（`cn/`、`config/`、`install-cn.sh`）——上游没有这些文件，永远不会被升级覆盖
 
 ## 补丁内容
