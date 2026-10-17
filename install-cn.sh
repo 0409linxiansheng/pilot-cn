@@ -226,6 +226,24 @@ verify_install() {
     warn "MariaDB 连不上（socket: ${sock}）"; fails=$((fails + 1))
   fi
 
+  # 7) 版本是否等于配置里钉的
+  # 「钉版本」如果没生效，装完根本看不出来 —— 这里直接比对代码里的 __version__。
+  local pair app want got
+  for pair in "frappe:${FRAPPE_BRANCH:-}" "erpnext:${ERPNEXT_BRANCH:-}"; do
+    app="${pair%%:*}"; want="${pair#*:}"
+    [[ -n "$want" ]] || continue
+    got="$(sed -n 's/^__version__[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' \
+           "${bench_dir}/apps/${app}/${app}/__init__.py" 2>/dev/null | head -1)"
+    if [[ -z "$got" ]]; then
+      warn "读不到 ${app} 的版本号"; fails=$((fails + 1)); continue
+    fi
+    if [[ "$want" == "v${got}" || "$want" == "$got" ]]; then
+      ok "${app} 版本符合配置（v${got}）"
+    else
+      warn "${app} 装的是 v${got}，但配置钉的是 ${want}"; fails=$((fails + 1))
+    fi
+  done
+
   if [[ "$fails" -eq 0 ]]; then
     ok "验收全部通过"
     return 0

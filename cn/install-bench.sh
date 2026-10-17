@@ -87,6 +87,9 @@ create_bench() {
       || die "pilot new 失败"
   fi
 
+  # 必须在 pilot init 之前：把 frappe 分支钉成配置里的版本
+  pin_framework_branch
+
   # 必须在 pilot init 之前：让数据库用强密码而不是默认的 root
   write_db_config
 
@@ -95,6 +98,66 @@ create_bench() {
   else
     log "初始化 bench（克隆 frappe + 装依赖 + 构建，约 20-60 分钟）"
     pilot -b "$BENCH_NAME" init --no-dev || die "pilot init 失败"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# pilot new 给 frappe 的默认分支是 version-16 —— 这是「移动」的分支，上游一发版
+# 就往前走；而 mirrors.conf 钉的 FRAPPE_BRANCH 通常是个 tag。不钉住就会装到比预期
+# 新的版本：实测配置写 v16.51.0，装出来是 v16.52.0。
+# 必须在 pilot init 之前改，因为 init 就是按 bench.toml 里的分支去克隆的。
+# ---------------------------------------------------------------------------
+pin_framework_branch() {
+  local toml="${BENCH_DIR}/bench.toml"
+  [[ -f "$toml" ]] || return 0
+  [[ -n "${FRAPPE_BRANCH:-}" ]] || return 0
+
+  local current
+  current="$(python3 - "$toml" <<'PY'
+import sys
+in_app = False
+for line in open(sys.argv[1], encoding="utf-8"):
+    s = line.strip()
+    if s.startswith("[[apps]]"):
+        in_app = False
+    elif s == 'name = "frappe"':
+        in_app = True
+    elif in_app and s.startswith("branch ="):
+        print(s.split("=", 1)[1].strip().strip('"'))
+        break
+PY
+)"
+
+  if [[ "$current" == "$FRAPPE_BRANCH" ]]; then
+    log "frappe 分支已钉在 ${FRAPPE_BRANCH}"
+    return 0
+  fi
+
+  log "把 frappe 分支从『${current:-未知}』钉到『${FRAPPE_BRANCH}』"
+  if python3 - "$toml" "$FRAPPE_BRANCH" <<'PY'
+import sys
+path, branch = sys.argv[1], sys.argv[2]
+lines = open(path, encoding="utf-8").read().splitlines(keepends=True)
+in_app = done = False
+for i, line in enumerate(lines):
+    s = line.strip()
+    if s.startswith("[[apps]]"):
+        in_app = False
+    elif s == 'name = "frappe"':
+        in_app = True
+    elif in_app and s.startswith("branch ="):
+        indent = line[: len(line) - len(line.lstrip())]
+        lines[i] = f'{indent}branch = "{branch}"\n'
+        in_app, done = False, True
+        break
+if not done:
+    sys.exit(1)
+open(path, "w", encoding="utf-8").write("".join(lines))
+PY
+  then
+    ok "frappe 分支已钉到 ${FRAPPE_BRANCH}"
+  else
+    warn "钉 frappe 分支失败；bench.toml 里可能没有 [[apps]] name=\"frappe\" 段"
   fi
 }
 
