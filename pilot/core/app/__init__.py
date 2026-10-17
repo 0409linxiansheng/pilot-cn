@@ -459,6 +459,11 @@ class App:
         from pilot.managers.environment import PythonEnvManager
 
         PythonEnvManager(self.bench).build_assets_for_app(self)
+        # The build rewrites assets.json with new hashed file names. A running web
+        # process keeps the previous manifest cached (frappe caches assets_json), so
+        # without this reload it serves a page whose every bundle 404s until it is
+        # restarted - which is what a fresh app install looked like.
+        self.bench.reload_workers(web_only=True)
 
     def ensure_removable(self) -> None:
         if not self.path.exists():
