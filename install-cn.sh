@@ -16,6 +16,7 @@
 #    --skip-preflight   跳过预检（已有结论时）
 #    --skip-env         跳过环境层（已配好时）
 #    --skip-bench       只装 Pilot，不建 bench/站点
+#    --gui              只装到 Pilot 就停，剩下的在面板向导里选仓库/版本/数据库
 #    --bench-user USER  运行用户（覆盖 mirrors.conf 里的 RUN_USER）
 # ============================================================================
 
@@ -58,6 +59,7 @@ parse_args() {
       --skip-preflight) SKIP_PREFLIGHT=1 ;;
       --skip-env)       SKIP_ENV=1 ;;
       --skip-bench)     SKIP_BENCH=1 ;;
+      --gui)            GUI_MODE=1 ;;
       --bench-user)     BENCH_USER_OVERRIDE="${2:?--bench-user 需要用户名}"; shift ;;
       -h|--help)
         sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
