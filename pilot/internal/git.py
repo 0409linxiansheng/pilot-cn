@@ -50,7 +50,14 @@ class GitRepo:
 
     @property
     def remote_url(self) -> str:
-        return self._text("remote", "get-url", "origin")
+        """The URL exactly as written in .git/config.
+
+        Not `git remote get-url`: that applies url.<base>.insteadOf, so on a CN
+        install it reports the mirror/proxy address. Anything that records this
+        value (bench.toml, the app list) would then hold a repository URL the user
+        never configured, and marketplace matching would stop recognising the app.
+        """
+        return self._text("config", "--get", "remote.origin.url")
 
     def commit_subject(self, ref: str = "HEAD") -> str:
         return self._text("log", "-1", "--format=%s", ref)
