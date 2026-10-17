@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from flask import Blueprint, current_app, jsonify, request
@@ -7,6 +8,7 @@ from flask import Blueprint, current_app, jsonify, request
 from admin.backend.api.responses import accepted_task_response, error_response, no_content_response
 from admin.backend.api.v1.setup.config import (
     apply_existing_local_database,
+    framework_source,
     read_defaults,
     validate_configuration,
     validate_settable_keys,
@@ -22,9 +24,13 @@ from pilot.config import BenchConfig
 from pilot.config.bench import FRAMEWORK_BRANCHES
 from pilot.core.bench import Bench
 from pilot.exceptions import TaskConflictError, TaskNotFoundError
+from pilot.integrations.git.refs import GitRefsError, list_remote_refs
 from pilot.internal.atomic_file import exclusive_file_lock, replace_private_text_locked
+from pilot.internal.validators import validate_repo_url
 from pilot.managers.task import TaskReader, TaskStatus
 from pilot.tasks.wizard_setup import WizardSetupTask
+
+DEFAULT_FRAMEWORK_REPO = "https://github.com/frappe/frappe"
 
 setup_bp = Blueprint("setup", __name__)
 
@@ -46,7 +52,34 @@ def get_configuration():
 
 @setup_bp.get("/framework-branches")
 def get_framework_branches():
-    return jsonify({"branches": FRAMEWORK_BRANCHES})
+    """Branches *and tags* of the framework repository, read from the remote.
+
+    A CN install usually pins a release tag (v16.51.0), so a hard-coded branch list
+    cannot express what the wizard needs to offer. ``git ls-remote`` goes through
+    the same transport git already rewrites to a domestic mirror, which the GitHub
+    API does not; when even that is unreachable the built-in list keeps the wizard
+    usable instead of failing the page.
+    """
+    bench_root = Path(current_app.config["BENCH_ROOT"])
+    requested = (request.args.get("repo") or "").strip()
+    source = framework_source(bench_root)
+    repo = requested or (source[0] if source else "") or DEFAULT_FRAMEWORK_REPO
+    if error := validate_repo_url(repo):
+        return error_response("invalid_repository", error, 422)
+
+    try:
+        refs = list_remote_refs(repo)
+    except GitRefsError as exc:
+        logging.debug("Could not list refs for %s, using the built-in list: %s", repo, exc)
+        return jsonify({"branches": list(FRAMEWORK_BRANCHES), "repo": repo, "source": "fallback"})
+    return jsonify(
+        {
+            "branches": refs.wizard_choices(),
+            "repo": repo,
+            "source": "remote",
+            "truncated": refs.truncated,
+        }
+    )
 
 
 @setup_bp.put("/configuration")

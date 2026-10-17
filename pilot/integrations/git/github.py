@@ -95,7 +95,9 @@ class GitHubProvider(GitProvider):
         repo_url = f"https://{self.host}/{full_name}"
         try:
             result = subprocess.run(
-                ["git", "ls-remote", repo_url],
+                # Both heads and tags, and nothing else: a mirror also advertises
+                # pull-request refs, which the picker has no use for.
+                ["git", "ls-remote", "--heads", "--tags", repo_url],
                 capture_output=True,
                 text=True,
                 timeout=30,

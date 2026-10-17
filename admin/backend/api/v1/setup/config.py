@@ -115,6 +115,30 @@ def apply_existing_local_database(bench_root: Path, data: dict) -> dict:
     }
 
 
+def framework_source(bench_root: Path) -> tuple[str, str] | None:
+    """``(repo, branch)`` of the ``name = "frappe"`` entry in bench.toml, or None.
+
+    Read from the TOML directly rather than through the typed config so the wizard
+    still prefills when the rest of the file is half-configured (a fresh
+    ``pilot new`` bench, or one whose sections fail validation). The framework app
+    is found by name: its position in ``[[apps]]`` is not meaningful.
+    """
+    import tomllib
+
+    try:
+        with (bench_root / "bench.toml").open("rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, ValueError):
+        return None
+    entries = [app for app in data.get("apps") or [] if isinstance(app, dict)]
+    entry = next((app for app in entries if str(app.get("name", "")).lower() == "frappe"), None)
+    if entry is None:
+        entry = entries[0] if entries else None
+    if entry is None:
+        return None
+    return str(entry.get("repo") or ""), str(entry.get("branch") or "")
+
+
 def read_defaults(bench_root: Path) -> dict:
     from pilot.managers.platform import is_linux, native_process_manager
 
@@ -140,6 +164,16 @@ def read_defaults(bench_root: Path) -> dict:
                 result["bench_name"] = bench_root.name
         except Exception as exc:
             logging.debug("Could not read bench.toml settings: %s", exc)
+
+    # The app source always comes from the frappe [[apps]] entry, so the wizard
+    # prefills what the installer wrote even if the rest of bench.toml is invalid.
+    source = framework_source(bench_root)
+    if source is not None:
+        repo, branch = source
+        if repo:
+            result["app_repo"] = repo
+        if branch:
+            result["app_branch"] = branch
 
     for key in _PASSWORD_KEYS:
         result.setdefault(f"{key}_configured", False)

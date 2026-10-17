@@ -354,6 +354,13 @@ class BenchConfig:
 
     @property
     def framework_app(self) -> AppConfig:
+        """The Frappe framework app: the ``name = "frappe"`` entry, wherever it sits
+        in ``[[apps]]``. Reading ``apps[0]`` made the wizard's app_repo/app_branch
+        depend on list order, so an app installed before frappe silently prefilled
+        the wrong repository."""
+        for app in self.apps:
+            if app.name.lower() == "frappe":
+                return app
         if not self.apps:
             return AppConfig(name="frappe", repo="", branch="")
         return self.apps[0]
@@ -685,10 +692,15 @@ class BenchConfig:
             self.admin.set_password(str(value))
         elif key in FLAT_KEYS:
             _set_path(self, FLAT_KEYS[key], value)
-        elif key == "app_repo":
-            self.apps[0].repo = str(value)
-        elif key == "app_branch":
-            self.apps[0].branch = str(value)
+        elif key in ("app_repo", "app_branch"):
+            # Write where the wizard reads from: the named frappe entry, not apps[0].
+            if not self.apps:
+                self.apps.append(AppConfig(name="frappe", repo="", branch=""))
+            app = self.framework_app
+            if key == "app_repo":
+                app.repo = str(value)
+            else:
+                app.branch = str(value)
         elif key == "workers":
             self.workers.groups = _workers_to_groups(value)
         elif key == "production_process_manager":
