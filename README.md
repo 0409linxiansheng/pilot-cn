@@ -543,6 +543,8 @@ git push gitee main                                          # Gitee
 | 18 | **服务器 bench 默认关掉常驻 JS 监听**（`watch_apps_js=false`）：它会在 web 读过资产清单后再换一遍 hash，还常驻占 CPU | `install-cn.sh`、`cn/install-bench.sh`、`cn/lib/core.sh` |
 | 19 | **应用 `dev` extra 解析失败时降级安装**：frappe 把 pypika 钉在 fork 上，和它自己的 `pypika-stubs` 冲突，不能因此中断 init | `pilot/managers/environment.py` |
 | 20 | **向导失败后残留的 `.wizard-active` 自动清理**：bench 已初始化时不再把用户推回向导 | `admin/backend/api/v1/core.py` |
+| 21 | **市场应用更新时校验失败只告警不中断**：安装本来就不校验市场应用（钉住的是已发布的 commit），上游偶发的"孤立文件引用了没提交的模块"不该让整次更新失败 | `pilot/core/bench/update.py` |
+| 22 | **记录的仓库地址不再被 insteadOf 污染**：读 `.git/config` 原始值，避免把 `ghfast.top/...` 写进 bench.toml 后和市场 registry 对不上 | `pilot/internal/git.py` |
 
 ### 还没做
 

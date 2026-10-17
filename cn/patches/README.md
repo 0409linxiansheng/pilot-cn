@@ -17,7 +17,7 @@
 | `pilot/integrations/git/__init__.py` | 注册 Gitee / Local provider，新增 `repo_full_name` |
 | `pilot/core/app/__init__.py` | 已安装应用切换到不同 tag/branch（`_switch_to_commit`） |
 | `pilot/core/app/repository.py` | `switch_branch` 支持 tag |
-| `pilot/internal/git.py` | 新增 `remote_ref_sha`（分支或 tag 的 SHA） |
+| `pilot/internal/git.py` | 新增 `remote_ref_sha`（分支或 tag 的 SHA）；`remote_url` 改读 `.git/config` 原始值，避免 insteadOf 展开后的代理地址被写进 bench.toml |
 | `pilot/core/registry_cache.py` | 市场 registry 指向 Gitee（`PILOT_MARKETPLACE_URL` 可覆盖） |
 | `admin/backend/middleware.py` | 面板 cookie `sid` → `pilot_sid`（避免与 Frappe 冲突） |
 | `admin/backend/api/v1/auth.py` | 同上（登出删除对应 cookie） |
@@ -33,6 +33,7 @@
 | `pilot/core/site/login.py`、`pilot/core/site/__init__.py` | 站点 URL / 登录链接支持 `dev_host`，单站点时用面板地址 |
 | `pilot/tasks/new_site.py` | 建站后同步 `default_site` 并重启 web，站点立刻可访问 |
 | `pilot/managers/environment.py` | 应用 `dev` extra 解析失败时降级为不带 extra 安装（frappe 的 pypika 冲突） |
+| `pilot/core/bench/update.py` | 市场应用更新时校验失败只告警不中断（与安装时的"信任 registry 钉住版本"保持一致） |
 
 ## 怎么用
 
