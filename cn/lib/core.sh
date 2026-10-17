@@ -206,6 +206,25 @@ print_login_credentials() {
 }
 
 # ---------------------------------------------------------------------------
+# 服务器上的 bench 不需要 JS 文件监听。
+#
+# 常驻的 `esbuild --watch`（pilot start 拉起的 frappe watch）会在 web 进程已经
+# 读过 assets 清单之后再做一次初始构建，把 dist 里带 hash 的文件名换掉：页面里
+# 引用的旧文件名全部 404，登录进去就是白屏。构建应该发生在安装/升级时——那时
+# pilot 自己会构建资产并重启 web 进程。
+# ---------------------------------------------------------------------------
+disable_js_watching() {
+  local toml="$1"
+  [[ -f "$toml" ]] || return 0
+  if grep -q '^watch_apps_js[[:space:]]*=' "$toml"; then
+    sed -i 's/^watch_apps_js[[:space:]]*=.*/watch_apps_js = false/' "$toml"
+  else
+    sed -i '/^\[bench\]/a watch_apps_js = false' "$toml"
+  fi
+  ok "已关闭 JS 监听（watch_apps_js = false），资产只在安装/升级时构建"
+}
+
+# ---------------------------------------------------------------------------
 # 网络探测
 # ---------------------------------------------------------------------------
 # 探测 URL 可达（2xx/3xx 通过）。$2 可用 'HEAD' 走轻量请求。

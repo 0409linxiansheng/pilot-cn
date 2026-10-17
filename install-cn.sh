@@ -183,6 +183,7 @@ gui_setup() {
   fi
 
   prefill_framework_defaults "${bench_dir}/bench.toml"
+  disable_js_watching "${bench_dir}/bench.toml"
 
   log "启动 Pilot（未初始化的 bench 会自动进入安装向导）"
   sudo -u "$run_user" -H env XDG_RUNTIME_DIR="/run/user/${run_uid}" \

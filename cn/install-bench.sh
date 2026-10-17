@@ -90,6 +90,9 @@ create_bench() {
   # 必须在 pilot init 之前：把 frappe 分支钉成配置里的版本
   configure_framework_app
 
+  # 必须在 pilot start 之前：常驻的 JS 监听会在 web 缓存资产清单后再换掉 hash 文件名
+  disable_js_watching "${BENCH_DIR}/bench.toml"
+
   # 必须在 pilot init 之前：让数据库用强密码而不是默认的 root
   write_db_config
 
