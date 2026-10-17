@@ -45,6 +45,26 @@ class NewSiteTask(Task):
             db_type=self.db_type,
             on_progress=self.report,
         )
+        self.route_site()
+
+    def route_site(self) -> None:
+        """Serve the new site on this server's address, without a hosts entry.
+
+        A single-site bench gets pinned to its site (see config_files), but a
+        running dev server read that pin when it started, so it has to restart
+        before `http://<server>:8000` reaches the site instead of 404ing on the
+        Host header. Nothing to do when the bench serves several sites: the Host
+        header is then the only way to tell them apart.
+        """
+        if self.bench.config.production.enabled:
+            return
+        from pilot.config.common_site_config import read_common_site_config
+
+        before = read_common_site_config(self.bench.sites_path).get("default_site")
+        self.bench.write_common_site_config()
+        after = read_common_site_config(self.bench.sites_path).get("default_site")
+        if before != after:
+            self.bench.reload_workers(web_only=True)
 
     def fetch_missing_apps(self) -> None:
         """Fetch marketplace apps before Site.provision validates the app list."""

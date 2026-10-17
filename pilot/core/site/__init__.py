@@ -316,11 +316,17 @@ class Site:
         return update_public_config(self.path, patch)
 
     def admin_login_url(
-        self, proxy_tls: bool = False, user: str = "Administrator", full_name: str = ""
+        self,
+        proxy_tls: bool = False,
+        user: str = "Administrator",
+        full_name: str = "",
+        dev_host: str = "",
     ) -> str | None:
         from pilot.core.site.login import SiteLogin
 
-        return SiteLogin(self).admin_url(proxy_tls=proxy_tls, user=user, full_name=full_name)
+        return SiteLogin(self).admin_url(
+            proxy_tls=proxy_tls, user=user, full_name=full_name, dev_host=dev_host
+        )
 
     def _build_missing_assets(self) -> None:
         from pilot.core.site.provisioning import SiteProvisioner

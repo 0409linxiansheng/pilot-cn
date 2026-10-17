@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from flask import current_app, g, jsonify, request, url_for
 
@@ -81,7 +82,12 @@ def detail(name: str):
         http_port = bench_config.http_port
         nginx_enabled = bench_config.production.enabled
         admin_tls = bench_config.admin.route_policy.public_tls
-        url = site_url(name, site.site_config, bench_config)
+        url = site_url(
+            name,
+            site.site_config,
+            bench_config,
+            host_override=_panel_host() if _serves_any_host(bench, name) else "",
+        )
         site_tls = pilot_site.uses_tls(pilot_site.primary)
     except Exception:
         http_port = 8000
@@ -308,7 +314,11 @@ def create_login_link(name: str):
         return site_not_found()
     user, full_name = Session.get_login_user(g.jwt_claims)
     try:
-        url = Bench(bench_root).site(name).admin_login_url(user=user, full_name=full_name)
+        url = (
+            Bench(bench_root)
+            .site(name)
+            .admin_login_url(user=user, full_name=full_name, dev_host=_panel_host())
+        )
     except Exception:
         return error_response(
             "configuration_unavailable",
@@ -326,6 +336,25 @@ def create_login_link(name: str):
     if hint := unreachable_host_hint(url):
         payload["hint"] = hint
     return _no_store(created_response(payload, url))
+
+
+def _panel_host() -> str:
+    """The host the admin itself was reached on - the one address we know works
+    in this user's browser."""
+    return urlsplit(f"//{request.host}").hostname or ""
+
+
+def _serves_any_host(bench: Bench, name: str) -> bool:
+    """Whether the dev server serves this site for every Host (single site, pinned).
+
+    Then the site's URL can be the address the panel was reached on; otherwise it
+    has to be the site name, which only resolves if the user added it to hosts.
+    """
+    from pilot.config.common_site_config import read_common_site_config
+
+    if bench.config.production.enabled:
+        return False
+    return read_common_site_config(bench.sites_path).get("default_site") == name
 
 
 def _site_resource(site: SiteInfo) -> dict:

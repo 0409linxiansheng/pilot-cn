@@ -73,3 +73,22 @@ class BenchConfigFiles:
                 config["client_cache_max_bytes"] = _LITE_CLIENT_CACHE_BYTES
             else:
                 config.pop("client_cache_max_bytes", None)
+            self._sync_default_site(config)
+
+    def _sync_default_site(self, config: dict) -> None:
+        """Pin the dev server to the only site, the way `bench use` does.
+
+        Frappe picks the site from the Host header. A server reached by IP sends
+        the IP as Host, so every request 404s with "<ip> does not exist" until
+        someone edits their hosts file. With one site there is nothing to choose:
+        pinning it serves that site for any Host. With several sites a pin would
+        make every address resolve to the same one, so Host routing decides and
+        the pin is removed.
+        """
+        if self.bench.config.production.enabled:
+            return
+        sites = [site.config.name for site in self.bench.sites()]
+        if len(sites) == 1:
+            config["default_site"] = sites[0]
+        else:
+            config.pop("default_site", None)

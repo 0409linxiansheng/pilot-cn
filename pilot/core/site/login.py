@@ -20,13 +20,17 @@ class SiteLogin:
         self.site = site
 
     def admin_url(
-        self, proxy_tls: bool = False, user: str = "Administrator", full_name: str = ""
+        self,
+        proxy_tls: bool = False,
+        user: str = "Administrator",
+        full_name: str = "",
+        dev_host: str = "",
     ) -> str | None:
         site_config = read_site_config(self.site.path)
         sid = self.create_session(user, full_name)
         if not sid:
             return None
-        redirect_url = self.redirect_url(site_config, proxy_tls)
+        redirect_url = self.redirect_url(site_config, proxy_tls, dev_host)
         return f"{redirect_url}{'&' if '?' in redirect_url else '?'}sid={sid}"
 
     def create_session(self, user: str = "Administrator", full_name: str = "") -> str | None:
@@ -61,13 +65,38 @@ class SiteLogin:
         sid = lines[-1] if lines else ""
         return sid if re.fullmatch(r"[A-Za-z0-9._-]+", sid) else None
 
-    def redirect_url(self, site_config: dict, proxy_tls: bool = False) -> str:
-        return site_url(self.site.config.name, site_config, self.site.bench.config, proxy_tls) + "/desk"
+    def redirect_url(self, site_config: dict, proxy_tls: bool = False, dev_host: str = "") -> str:
+        host_override = dev_host if dev_host and self.serves_any_host() else ""
+        url = site_url(
+            self.site.config.name, site_config, self.site.bench.config, proxy_tls, host_override
+        )
+        return url + "/desk"
+
+    def serves_any_host(self) -> bool:
+        """Whether the dev server is pinned to this site (a single-site bench).
+
+        Frappe otherwise picks the site from the Host header, so links have to
+        name a host the browser can resolve - and the site name rarely is one.
+        When pinned, the address the panel was reached on serves this site too,
+        which is the one address the user is known to have working.
+        """
+        from pilot.config.common_site_config import read_common_site_config
+
+        if self.site.bench.config.production.enabled:
+            return False
+        pinned = read_common_site_config(self.site.bench.sites_path).get("default_site")
+        return pinned == self.site.config.name
 
 
-def site_url(site_name: str, site_config: dict, bench_config, proxy_tls: bool = False) -> str:
+def site_url(
+    site_name: str,
+    site_config: dict,
+    bench_config,
+    proxy_tls: bool = False,
+    host_override: str = "",
+) -> str:
     """The origin the site is served on, matching how the bench serves it."""
-    host = primary_host(site_name, site_config)
+    host = host_override or primary_host(site_name, site_config)
     if not bench_config.production.enabled:
         return origin("http", host, bench_config.http_port)
 
