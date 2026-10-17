@@ -82,7 +82,14 @@ def bootstrap():
         with exclusive_file_lock(marker):
             if marker.exists():
                 handoff_task_id = marker.read_text(encoding="utf-8").strip()
-                if not handoff_task_id and _is_setup_complete(bench_root, config):
+                # The marker only means "the wizard still owns this bench" while its
+                # task is running or succeeded and is waiting for finish(). A failed
+                # task leaves the marker behind, so a bench that was initialised by
+                # other means (e.g. `pilot init` after fixing the failure) would sit
+                # on the wizard forever.
+                if not _marker_task_awaits_finish(bench_root, handoff_task_id) and _is_setup_complete(
+                    bench_root, config
+                ):
                     marker.unlink(missing_ok=True)
                 else:
                     return jsonify(_setup_bootstrap(bench_root))
@@ -137,3 +144,24 @@ def _is_setup_complete(bench_root: Path, config: BenchConfig) -> bool:
         return not any(task.command == "wizard-setup" and task.status.is_active for task in tasks)
     except Exception:
         return True
+
+
+def _marker_task_awaits_finish(bench_root: Path, task_id: str) -> bool:
+    """Whether the marker's task still owns the wizard: running, or succeeded and
+    waiting for the client's finish(). A failed or unknown task does not."""
+    if not task_id:
+        return False
+    from pilot.exceptions import TaskNotFoundError
+    from pilot.managers.task import TaskReader, TaskStatus
+
+    try:
+        task = TaskReader(bench_root).read_task(task_id)
+    except TaskNotFoundError:
+        return False
+    except Exception:
+        # Unreadable store: assume the marker is still meaningful rather than
+        # dropping the user into a dashboard for a bench that may be mid-setup.
+        return True
+    if task.command != "wizard-setup":
+        return False
+    return task.status.is_active or task.status == TaskStatus.SUCCESS
