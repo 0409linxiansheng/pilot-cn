@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from pilot.core.app.node_packages import PACKAGE_MANAGERS, YARN, NodePackages
-from pilot.exceptions import BenchError
+from pilot.exceptions import BenchError, CommandError
 from pilot.managers.platform import add_mysqlclient_flags, is_macos, which
 from pilot.managers.python_assets import PythonAssetBuilder
 from pilot.utils import run_command
@@ -169,8 +169,25 @@ class PythonEnvManager:
     def install_app(self, app: "App") -> None:
         uv = ensure_uv()
         python = str(self.bench.env_path / "bin" / "python")
+        try:
+            self._install_editable(uv, python, app.editable_target)
+        except CommandError:
+            if app.editable_target == str(app.path):
+                raise
+            # An app's dev extra can be unsatisfiable while the app itself installs
+            # fine: frappe pins PyPika to a fork (0.51.x) whose own `pypika-stubs`
+            # dev dependency demands <0.49, so `-e frappe[dev]` resolves to nothing.
+            # Dev extras are tooling (typing stubs, test helpers) - the bench needs
+            # the app, so retry without them instead of aborting the whole init.
+            print(
+                "  dev extra is not resolvable for this app; installing it without the extra "
+                "(set bench.install_dev_extra = false to skip this retry)"
+            )
+            self._install_editable(uv, python, str(app.path))
+
+    def _install_editable(self, uv: str, python: str, target: str) -> None:
         run_command(
-            [uv, "pip", "install", "--python", python, "-e", app.editable_target],
+            [uv, "pip", "install", "--python", python, "-e", target],
             stream_output=True,
             env=self._build_env(),
         )
