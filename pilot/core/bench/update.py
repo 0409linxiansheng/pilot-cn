@@ -21,7 +21,7 @@ class BenchUpdater:
         """Update each app to its pin, or resolve marketplace/branch targets live when `pins` is None (direct CLI update)."""
         import sys
 
-        from pilot.exceptions import CommandError, MigrateError
+        from pilot.exceptions import AppValidationError, CommandError, MigrateError
 
         live_lookup = pins is None
         pins = pins or {}
@@ -47,7 +47,20 @@ class BenchUpdater:
         # installed or built yet, and reverting is a checkout.
         for app in updated:
             on_progress(f"Validating {app.config.name}...")
-            app.validate()
+            try:
+                app.validate()
+            except AppValidationError as error:
+                if not app.is_marketplace:
+                    raise
+                # A marketplace app is pinned to a reviewed release, and the installer
+                # trusts one (it only validates apps it cloned itself). A validator
+                # false positive - say an orphan module importing files the release
+                # never shipped - must not make that release impossible to update to.
+                # The operation still holds its backup and can be reverted.
+                print(
+                    f"  Warning: {app.config.name} did not pass validation:\n{error}",
+                    file=sys.stderr,
+                )
 
     @staticmethod
     def _follows_its_branch(app: "App", live_lookup: bool) -> bool:

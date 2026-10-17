@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 import pytest
 
@@ -81,6 +81,24 @@ def test_update_apps_only_validates_the_filtered_apps(tmp_path: Path) -> None:
 
     with patch.object(App, "update"):
         BenchUpdater(bench).update_apps({"myapp"}, lambda message: None, pins=_pins("myapp", "brokenapp"))
+
+
+def test_update_apps_warns_instead_of_aborting_for_a_marketplace_app(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The installer trusts a registry-pinned app without validating it, so a
+    validator false positive must not make that release impossible to update to."""
+    bench = make_bench(tmp_path)
+    bench.create_directories()
+    _write_app(bench, "myapp", fixture='[{"doctype":\n')
+
+    with (
+        patch.object(App, "update"),
+        patch.object(App, "is_marketplace", new_callable=PropertyMock, return_value=True),
+    ):
+        BenchUpdater(bench).update_apps(None, lambda message: None, pins=_pins("myapp"))
+
+    assert "did not pass validation" in capsys.readouterr().err
 
 
 def test_update_apps_rejects_an_app_with_no_pyproject(tmp_path: Path) -> None:
