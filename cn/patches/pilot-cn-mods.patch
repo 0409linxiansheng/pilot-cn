@@ -40,6 +40,51 @@ index 09ea3c1..b44bca1 100644
      return response
  
  
+diff --git a/admin/backend/api/v1/core.py b/admin/backend/api/v1/core.py
+index 033704f..b752ed8 100644
+--- a/admin/backend/api/v1/core.py
++++ b/admin/backend/api/v1/core.py
+@@ -82,7 +82,14 @@ def bootstrap():
+         with exclusive_file_lock(marker):
+             if marker.exists():
+                 handoff_task_id = marker.read_text(encoding="utf-8").strip()
+-                if not handoff_task_id and _is_setup_complete(bench_root, config):
++                # The marker only means "the wizard still owns this bench" while its
++                # task is running or succeeded and is waiting for finish(). A failed
++                # task leaves the marker behind, so a bench that was initialised by
++                # other means (e.g. `pilot init` after fixing the failure) would sit
++                # on the wizard forever.
++                if not _marker_task_awaits_finish(bench_root, handoff_task_id) and _is_setup_complete(
++                    bench_root, config
++                ):
+                     marker.unlink(missing_ok=True)
+                 else:
+                     return jsonify(_setup_bootstrap(bench_root))
+@@ -137,3 +144,24 @@ def _is_setup_complete(bench_root: Path, config: BenchConfig) -> bool:
+         return not any(task.command == "wizard-setup" and task.status.is_active for task in tasks)
+     except Exception:
+         return True
++
++
++def _marker_task_awaits_finish(bench_root: Path, task_id: str) -> bool:
++    """Whether the marker's task still owns the wizard: running, or succeeded and
++    waiting for the client's finish(). A failed or unknown task does not."""
++    if not task_id:
++        return False
++    from pilot.exceptions import TaskNotFoundError
++    from pilot.managers.task import TaskReader, TaskStatus
++
++    try:
++        task = TaskReader(bench_root).read_task(task_id)
++    except TaskNotFoundError:
++        return False
++    except Exception:
++        # Unreadable store: assume the marker is still meaningful rather than
++        # dropping the user into a dashboard for a bench that may be mid-setup.
++        return True
++    if task.command != "wizard-setup":
++        return False
++    return task.status.is_active or task.status == TaskStatus.SUCCESS
 diff --git a/admin/backend/api/v1/git.py b/admin/backend/api/v1/git.py
 index 8fc591f..b9252f2 100644
 --- a/admin/backend/api/v1/git.py
@@ -68,6 +113,193 @@ index 8fc591f..b9252f2 100644
      provider = provider_for_repo(repo_url, token) or provider_for_name("github", token)
      try:
          branches = provider.list_branches(full_name)
+diff --git a/admin/backend/api/v1/setup/__init__.py b/admin/backend/api/v1/setup/__init__.py
+index b7b781c..f3f46a8 100644
+--- a/admin/backend/api/v1/setup/__init__.py
++++ b/admin/backend/api/v1/setup/__init__.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ 
++import logging
+ from pathlib import Path
+ 
+ from flask import Blueprint, current_app, jsonify, request
+@@ -7,6 +8,7 @@ from flask import Blueprint, current_app, jsonify, request
+ from admin.backend.api.responses import accepted_task_response, error_response, no_content_response
+ from admin.backend.api.v1.setup.config import (
+     apply_existing_local_database,
++    framework_source,
+     read_defaults,
+     validate_configuration,
+     validate_settable_keys,
+@@ -22,10 +24,14 @@ from pilot.config import BenchConfig
+ from pilot.config.bench import FRAMEWORK_BRANCHES
+ from pilot.core.bench import Bench
+ from pilot.exceptions import TaskConflictError, TaskNotFoundError
++from pilot.integrations.git.refs import GitRefsError, list_remote_refs
+ from pilot.internal.atomic_file import exclusive_file_lock, replace_private_text_locked
++from pilot.internal.validators import validate_repo_url
+ from pilot.managers.task import TaskReader, TaskStatus
+ from pilot.tasks.wizard_setup import WizardSetupTask
+ 
++DEFAULT_FRAMEWORK_REPO = "https://github.com/frappe/frappe"
++
+ setup_bp = Blueprint("setup", __name__)
+ 
+ __all__ = [
+@@ -46,7 +52,34 @@ def get_configuration():
+ 
+ @setup_bp.get("/framework-branches")
+ def get_framework_branches():
+-    return jsonify({"branches": FRAMEWORK_BRANCHES})
++    """Branches *and tags* of the framework repository, read from the remote.
++
++    A CN install usually pins a release tag (v16.51.0), so a hard-coded branch list
++    cannot express what the wizard needs to offer. ``git ls-remote`` goes through
++    the same transport git already rewrites to a domestic mirror, which the GitHub
++    API does not; when even that is unreachable the built-in list keeps the wizard
++    usable instead of failing the page.
++    """
++    bench_root = Path(current_app.config["BENCH_ROOT"])
++    requested = (request.args.get("repo") or "").strip()
++    source = framework_source(bench_root)
++    repo = requested or (source[0] if source else "") or DEFAULT_FRAMEWORK_REPO
++    if error := validate_repo_url(repo):
++        return error_response("invalid_repository", error, 422)
++
++    try:
++        refs = list_remote_refs(repo)
++    except GitRefsError as exc:
++        logging.debug("Could not list refs for %s, using the built-in list: %s", repo, exc)
++        return jsonify({"branches": list(FRAMEWORK_BRANCHES), "repo": repo, "source": "fallback"})
++    return jsonify(
++        {
++            "branches": refs.wizard_choices(),
++            "repo": repo,
++            "source": "remote",
++            "truncated": refs.truncated,
++        }
++    )
+ 
+ 
+ @setup_bp.put("/configuration")
+diff --git a/admin/backend/api/v1/setup/config.py b/admin/backend/api/v1/setup/config.py
+index 0d99e33..b32cc2a 100644
+--- a/admin/backend/api/v1/setup/config.py
++++ b/admin/backend/api/v1/setup/config.py
+@@ -115,6 +115,30 @@ def apply_existing_local_database(bench_root: Path, data: dict) -> dict:
+     }
+ 
+ 
++def framework_source(bench_root: Path) -> tuple[str, str] | None:
++    """``(repo, branch)`` of the ``name = "frappe"`` entry in bench.toml, or None.
++
++    Read from the TOML directly rather than through the typed config so the wizard
++    still prefills when the rest of the file is half-configured (a fresh
++    ``pilot new`` bench, or one whose sections fail validation). The framework app
++    is found by name: its position in ``[[apps]]`` is not meaningful.
++    """
++    import tomllib
++
++    try:
++        with (bench_root / "bench.toml").open("rb") as handle:
++            data = tomllib.load(handle)
++    except (OSError, ValueError):
++        return None
++    entries = [app for app in data.get("apps") or [] if isinstance(app, dict)]
++    entry = next((app for app in entries if str(app.get("name", "")).lower() == "frappe"), None)
++    if entry is None:
++        entry = entries[0] if entries else None
++    if entry is None:
++        return None
++    return str(entry.get("repo") or ""), str(entry.get("branch") or "")
++
++
+ def read_defaults(bench_root: Path) -> dict:
+     from pilot.managers.platform import is_linux, native_process_manager
+ 
+@@ -141,6 +165,16 @@ def read_defaults(bench_root: Path) -> dict:
+         except Exception as exc:
+             logging.debug("Could not read bench.toml settings: %s", exc)
+ 
++    # The app source always comes from the frappe [[apps]] entry, so the wizard
++    # prefills what the installer wrote even if the rest of bench.toml is invalid.
++    source = framework_source(bench_root)
++    if source is not None:
++        repo, branch = source
++        if repo:
++            result["app_repo"] = repo
++        if branch:
++            result["app_branch"] = branch
++
+     for key in _PASSWORD_KEYS:
+         result.setdefault(f"{key}_configured", False)
+ 
+diff --git a/admin/backend/api/v1/sites/core.py b/admin/backend/api/v1/sites/core.py
+index 0e5accc..d646162 100644
+--- a/admin/backend/api/v1/sites/core.py
++++ b/admin/backend/api/v1/sites/core.py
+@@ -2,6 +2,7 @@ from __future__ import annotations
+ 
+ import secrets
+ from pathlib import Path
++from urllib.parse import urlsplit
+ 
+ from flask import current_app, g, jsonify, request, url_for
+ 
+@@ -81,7 +82,12 @@ def detail(name: str):
+         http_port = bench_config.http_port
+         nginx_enabled = bench_config.production.enabled
+         admin_tls = bench_config.admin.route_policy.public_tls
+-        url = site_url(name, site.site_config, bench_config)
++        url = site_url(
++            name,
++            site.site_config,
++            bench_config,
++            host_override=_panel_host() if _serves_any_host(bench, name) else "",
++        )
+         site_tls = pilot_site.uses_tls(pilot_site.primary)
+     except Exception:
+         http_port = 8000
+@@ -308,7 +314,11 @@ def create_login_link(name: str):
+         return site_not_found()
+     user, full_name = Session.get_login_user(g.jwt_claims)
+     try:
+-        url = Bench(bench_root).site(name).admin_login_url(user=user, full_name=full_name)
++        url = (
++            Bench(bench_root)
++            .site(name)
++            .admin_login_url(user=user, full_name=full_name, dev_host=_panel_host())
++        )
+     except Exception:
+         return error_response(
+             "configuration_unavailable",
+@@ -328,6 +338,25 @@ def create_login_link(name: str):
+     return _no_store(created_response(payload, url))
+ 
+ 
++def _panel_host() -> str:
++    """The host the admin itself was reached on - the one address we know works
++    in this user's browser."""
++    return urlsplit(f"//{request.host}").hostname or ""
++
++
++def _serves_any_host(bench: Bench, name: str) -> bool:
++    """Whether the dev server serves this site for every Host (single site, pinned).
++
++    Then the site's URL can be the address the panel was reached on; otherwise it
++    has to be the site name, which only resolves if the user added it to hosts.
++    """
++    from pilot.config.common_site_config import read_common_site_config
++
++    if bench.config.production.enabled:
++        return False
++    return read_common_site_config(bench.sites_path).get("default_site") == name
++
++
+ def _site_resource(site: SiteInfo) -> dict:
+     framework_branch = site.site_config.get("frappe_branch", "")
+     return {
 diff --git a/admin/backend/app.py b/admin/backend/app.py
 index 7f83f59..26eafc1 100644
 --- a/admin/backend/app.py
@@ -205,6 +437,44 @@ index f2886ed..c219f88 100644
      } catch (caught) {
        error.value = (caught instanceof Error && caught.message) || 'Failed to load marketplace'
      } finally {
+diff --git a/pilot/config/bench.py b/pilot/config/bench.py
+index b7c0a01..4e3a492 100644
+--- a/pilot/config/bench.py
++++ b/pilot/config/bench.py
+@@ -354,6 +354,13 @@ class BenchConfig:
+ 
+     @property
+     def framework_app(self) -> AppConfig:
++        """The Frappe framework app: the ``name = "frappe"`` entry, wherever it sits
++        in ``[[apps]]``. Reading ``apps[0]`` made the wizard's app_repo/app_branch
++        depend on list order, so an app installed before frappe silently prefilled
++        the wrong repository."""
++        for app in self.apps:
++            if app.name.lower() == "frappe":
++                return app
+         if not self.apps:
+             return AppConfig(name="frappe", repo="", branch="")
+         return self.apps[0]
+@@ -685,10 +692,15 @@ class BenchConfig:
+             self.admin.set_password(str(value))
+         elif key in FLAT_KEYS:
+             _set_path(self, FLAT_KEYS[key], value)
+-        elif key == "app_repo":
+-            self.apps[0].repo = str(value)
+-        elif key == "app_branch":
+-            self.apps[0].branch = str(value)
++        elif key in ("app_repo", "app_branch"):
++            # Write where the wizard reads from: the named frappe entry, not apps[0].
++            if not self.apps:
++                self.apps.append(AppConfig(name="frappe", repo="", branch=""))
++            app = self.framework_app
++            if key == "app_repo":
++                app.repo = str(value)
++            else:
++                app.branch = str(value)
+         elif key == "workers":
+             self.workers.groups = _workers_to_groups(value)
+         elif key == "production_process_manager":
 diff --git a/pilot/core/adapters/domain_provider.py b/pilot/core/adapters/domain_provider.py
 index 144fe5b..f73aac6 100644
 --- a/pilot/core/adapters/domain_provider.py
@@ -268,7 +538,7 @@ index 144fe5b..f73aac6 100644
      @staticmethod
      def _resolve(host: str) -> set[str]:
 diff --git a/pilot/core/app/__init__.py b/pilot/core/app/__init__.py
-index ab58c8b..a16a742 100644
+index ab58c8b..d60ae19 100644
 --- a/pilot/core/app/__init__.py
 +++ b/pilot/core/app/__init__.py
 @@ -304,6 +304,27 @@ class App:
@@ -311,6 +581,18 @@ index ab58c8b..a16a742 100644
              return self._skip_already_installed(on_progress, install_dependencies, skip_assets)
  
          existing_clone = self.existing_clone_path
+@@ -433,6 +459,11 @@ class App:
+         from pilot.managers.environment import PythonEnvManager
+ 
+         PythonEnvManager(self.bench).build_assets_for_app(self)
++        # The build rewrites assets.json with new hashed file names. A running web
++        # process keeps the previous manifest cached (frappe caches assets_json), so
++        # without this reload it serves a page whose every bundle 404s until it is
++        # restarted - which is what a fresh app install looked like.
++        self.bench.reload_workers(web_only=True)
+ 
+     def ensure_removable(self) -> None:
+         if not self.path.exists():
 diff --git a/pilot/core/app/repository.py b/pilot/core/app/repository.py
 index fc9895e..85a6647 100644
 --- a/pilot/core/app/repository.py
@@ -373,6 +655,61 @@ index fc9895e..85a6647 100644
          self.app.config.branch = branch
  
      def checkout_pinned_target(self, pin: RevisionPin) -> None:
+diff --git a/pilot/core/bench/config_files.py b/pilot/core/bench/config_files.py
+index dda5eef..d1d57ed 100644
+--- a/pilot/core/bench/config_files.py
++++ b/pilot/core/bench/config_files.py
+@@ -73,3 +73,22 @@ class BenchConfigFiles:
+                 config["client_cache_max_bytes"] = _LITE_CLIENT_CACHE_BYTES
+             else:
+                 config.pop("client_cache_max_bytes", None)
++            self._sync_default_site(config)
++
++    def _sync_default_site(self, config: dict) -> None:
++        """Pin the dev server to the only site, the way `bench use` does.
++
++        Frappe picks the site from the Host header. A server reached by IP sends
++        the IP as Host, so every request 404s with "<ip> does not exist" until
++        someone edits their hosts file. With one site there is nothing to choose:
++        pinning it serves that site for any Host. With several sites a pin would
++        make every address resolve to the same one, so Host routing decides and
++        the pin is removed.
++        """
++        if self.bench.config.production.enabled:
++            return
++        sites = [site.config.name for site in self.bench.sites()]
++        if len(sites) == 1:
++            config["default_site"] = sites[0]
++        else:
++            config.pop("default_site", None)
+diff --git a/pilot/core/bench/runtime.py b/pilot/core/bench/runtime.py
+index f9fcdec..dcdba1e 100644
+--- a/pilot/core/bench/runtime.py
++++ b/pilot/core/bench/runtime.py
+@@ -243,20 +243,15 @@ class BenchRuntime:
+             return 7000
+ 
+     def _install_python_requirements(self, on_progress: Callable[[str], None]) -> None:
+-        from pilot.managers.environment import ensure_uv
+-        from pilot.utils import run_command
++        from pilot.managers.environment import PythonEnvManager
+ 
+-        uv = ensure_uv()
+-        python = str(self.bench.python)
++        env_manager = PythonEnvManager(self.bench)
+ 
+         for app in self.bench.apps():
+             if not (app.path / "pyproject.toml").exists() and not (app.path / "setup.py").exists():
+                 continue
+             on_progress(f"Installing Python requirements for {app.config.name}...")
+-            run_command(
+-                [uv, "pip", "install", "--python", python, "-e", app.editable_target],
+-                stream_output=True,
+-            )
++            env_manager.install_app(app)
+ 
+     def _install_js_requirements(self, on_progress: Callable[[str], None]) -> None:
+         from pilot.core.app.node_packages import NodePackages
 diff --git a/pilot/core/registry_cache.py b/pilot/core/registry_cache.py
 index a1161a2..b3a880b 100644
 --- a/pilot/core/registry_cache.py
@@ -396,6 +733,99 @@ index a1161a2..b3a880b 100644
  
  _REFRESH_INTERVAL_SECONDS = 60 * 60
  _LS_REMOTE_TIMEOUT_SECONDS = 15
+diff --git a/pilot/core/site/__init__.py b/pilot/core/site/__init__.py
+index 575d259..92631cd 100644
+--- a/pilot/core/site/__init__.py
++++ b/pilot/core/site/__init__.py
+@@ -316,11 +316,17 @@ class Site:
+         return update_public_config(self.path, patch)
+ 
+     def admin_login_url(
+-        self, proxy_tls: bool = False, user: str = "Administrator", full_name: str = ""
++        self,
++        proxy_tls: bool = False,
++        user: str = "Administrator",
++        full_name: str = "",
++        dev_host: str = "",
+     ) -> str | None:
+         from pilot.core.site.login import SiteLogin
+ 
+-        return SiteLogin(self).admin_url(proxy_tls=proxy_tls, user=user, full_name=full_name)
++        return SiteLogin(self).admin_url(
++            proxy_tls=proxy_tls, user=user, full_name=full_name, dev_host=dev_host
++        )
+ 
+     def _build_missing_assets(self) -> None:
+         from pilot.core.site.provisioning import SiteProvisioner
+diff --git a/pilot/core/site/login.py b/pilot/core/site/login.py
+index 48f170f..4627a50 100644
+--- a/pilot/core/site/login.py
++++ b/pilot/core/site/login.py
+@@ -20,13 +20,17 @@ class SiteLogin:
+         self.site = site
+ 
+     def admin_url(
+-        self, proxy_tls: bool = False, user: str = "Administrator", full_name: str = ""
++        self,
++        proxy_tls: bool = False,
++        user: str = "Administrator",
++        full_name: str = "",
++        dev_host: str = "",
+     ) -> str | None:
+         site_config = read_site_config(self.site.path)
+         sid = self.create_session(user, full_name)
+         if not sid:
+             return None
+-        redirect_url = self.redirect_url(site_config, proxy_tls)
++        redirect_url = self.redirect_url(site_config, proxy_tls, dev_host)
+         return f"{redirect_url}{'&' if '?' in redirect_url else '?'}sid={sid}"
+ 
+     def create_session(self, user: str = "Administrator", full_name: str = "") -> str | None:
+@@ -61,13 +65,38 @@ class SiteLogin:
+         sid = lines[-1] if lines else ""
+         return sid if re.fullmatch(r"[A-Za-z0-9._-]+", sid) else None
+ 
+-    def redirect_url(self, site_config: dict, proxy_tls: bool = False) -> str:
+-        return site_url(self.site.config.name, site_config, self.site.bench.config, proxy_tls) + "/desk"
+-
+-
+-def site_url(site_name: str, site_config: dict, bench_config, proxy_tls: bool = False) -> str:
++    def redirect_url(self, site_config: dict, proxy_tls: bool = False, dev_host: str = "") -> str:
++        host_override = dev_host if dev_host and self.serves_any_host() else ""
++        url = site_url(
++            self.site.config.name, site_config, self.site.bench.config, proxy_tls, host_override
++        )
++        return url + "/desk"
++
++    def serves_any_host(self) -> bool:
++        """Whether the dev server is pinned to this site (a single-site bench).
++
++        Frappe otherwise picks the site from the Host header, so links have to
++        name a host the browser can resolve - and the site name rarely is one.
++        When pinned, the address the panel was reached on serves this site too,
++        which is the one address the user is known to have working.
++        """
++        from pilot.config.common_site_config import read_common_site_config
++
++        if self.site.bench.config.production.enabled:
++            return False
++        pinned = read_common_site_config(self.site.bench.sites_path).get("default_site")
++        return pinned == self.site.config.name
++
++
++def site_url(
++    site_name: str,
++    site_config: dict,
++    bench_config,
++    proxy_tls: bool = False,
++    host_override: str = "",
++) -> str:
+     """The origin the site is served on, matching how the bench serves it."""
+-    host = primary_host(site_name, site_config)
++    host = host_override or primary_host(site_name, site_config)
+     if not bench_config.production.enabled:
+         return origin("http", host, bench_config.http_port)
+ 
 diff --git a/pilot/integrations/git/__init__.py b/pilot/integrations/git/__init__.py
 index c3b2e92..de7dc06 100644
 --- a/pilot/integrations/git/__init__.py
@@ -461,7 +891,7 @@ index c3b2e92..de7dc06 100644
  
      ref = requested_branch or "HEAD"
 diff --git a/pilot/integrations/git/github.py b/pilot/integrations/git/github.py
-index b91abf6..6cafad6 100644
+index b91abf6..cbff295 100644
 --- a/pilot/integrations/git/github.py
 +++ b/pilot/integrations/git/github.py
 @@ -16,16 +16,15 @@ from pilot.integrations.git.base import (
@@ -502,16 +932,18 @@ index b91abf6..6cafad6 100644
  class GitHubProvider(GitProvider):
      name = "github"
      host = GITHUB_HOST
-@@ -86,7 +95,7 @@ class GitHubProvider(GitProvider):
+@@ -86,7 +95,9 @@ class GitHubProvider(GitProvider):
          repo_url = f"https://{self.host}/{full_name}"
          try:
              result = subprocess.run(
 -                ["git", "ls-remote", "--heads", repo_url],
-+                ["git", "ls-remote", repo_url],
++                # Both heads and tags, and nothing else: a mirror also advertises
++                # pull-request refs, which the picker has no use for.
++                ["git", "ls-remote", "--heads", "--tags", repo_url],
                  capture_output=True,
                  text=True,
                  timeout=30,
-@@ -100,40 +109,100 @@ class GitHubProvider(GitProvider):
+@@ -100,40 +111,100 @@ class GitHubProvider(GitProvider):
              if "authentication failed" in result.stderr.lower():
                  raise GitAuthError(f"GitHub rejected the stored token for {full_name}.")
              raise GitProviderError(f"Could not list branches for {full_name}.")
@@ -705,6 +1137,166 @@ index 0000000..4fc9de2
 +            return (local / path).read_text()
 +        except OSError as exc:
 +            raise GitProviderError(f"{path} not found in {repo_url!r}.") from exc
+diff --git a/pilot/integrations/git/refs.py b/pilot/integrations/git/refs.py
+new file mode 100644
+index 0000000..19d10c4
+--- /dev/null
++++ b/pilot/integrations/git/refs.py
+@@ -0,0 +1,154 @@
++"""Remote ref listing over the git transport.
++
++`git ls-remote` is the one call that behaves the same for GitHub, Gitee, and any
++self-hosted remote, and it is covered by git's ``url.<mirror>.insteadOf`` rewrite -
++which is exactly the knob a CN install turns to reach github.com. The hosting APIs
++(``api.github.com``) are *not* covered by that rewrite, so the wizard asks git
++instead of an API when it needs the list of branches and tags.
++
++A mirror of frappe can carry hundreds of pull-request branches and over a thousand
++tags, which is noise in a picker. :meth:`RemoteRefs.wizard_choices` keeps the ones
++anyone actually deploys (version lines and release tags) and lets the combobox's
++free-text entry cover anything else.
++"""
++
++from __future__ import annotations
++
++import re
++import subprocess
++import threading
++import time
++from dataclasses import dataclass
++
++from pilot.internal.git import git_env
++
++LS_TIMEOUT_SECONDS = 20
++CACHE_TTL_SECONDS = 10 * 60
++MAX_BRANCHES = 60
++MAX_TAGS = 120
++
++# version-16, version-15-hotfix, develop, main, master, staging
++_RELEASE_BRANCH_RE = re.compile(r"^(?:version-\d+(?:-hotfix)?|develop|main|master|staging)$")
++# v16.51.0, 16.51.0, v1_2_3 - a tag that names a release rather than a build
++_VERSION_TAG_RE = re.compile(r"^v?\d+(?:[._-]\d+)*$")
++
++
++class GitRefsError(Exception):
++    """The remote's refs could not be listed."""
++
++
++@dataclass(frozen=True)
++class RemoteRefs:
++    """Every branch and tag a remote advertises."""
++
++    branches: list[str]
++    tags: list[str]
++
++    @property
++    def truncated(self) -> bool:
++        """Whether the wizard's list drops refs this repo actually has."""
++        return len(self.branches) > MAX_BRANCHES or len(self.tags) > MAX_TAGS
++
++    def wizard_choices(self) -> list[str]:
++        """Branches, newest version line first, then tags, newest release first."""
++        heads = [branch for branch in self.branches if _RELEASE_BRANCH_RE.match(branch)]
++        if len(heads) < 3:
++            # No version-* layout: show what there is rather than hiding everything.
++            heads = list(self.branches)
++        tags = [tag for tag in self.tags if _VERSION_TAG_RE.match(tag)] or list(self.tags)
++        # dict.fromkeys: a name can be both a branch and a tag.
++        return list(
++            dict.fromkeys(
++                sorted(heads, key=_release_key, reverse=True)[:MAX_BRANCHES]
++                + _newest_first(tags)[:MAX_TAGS]
++            )
++        )
++
++
++def parse_refs(output: str) -> RemoteRefs:
++    """Parse ``git ls-remote`` output (peeled ``^{}`` tag lines dropped)."""
++    branches: list[str] = []
++    tags: list[str] = []
++    for line in output.splitlines():
++        parts = line.split()
++        if len(parts) < 2:
++            continue
++        ref = parts[1]
++        if ref.startswith("refs/heads/"):
++            branches.append(ref[len("refs/heads/") :])
++        elif ref.startswith("refs/tags/"):
++            tag = ref[len("refs/tags/") :]
++            if not tag.endswith("^{}"):
++                tags.append(tag)
++    return RemoteRefs(branches=branches, tags=tags)
++
++
++def _natural_key(name: str) -> tuple:
++    """Sort key where v16.9.0 < v16.51.0 (integers, not text, compare)."""
++    parts = re.split(r"(\d+)", name)
++    return tuple((0, int(part)) if part.isdigit() else (1, part) for part in parts if part)
++
++
++def _newest_first(names: list[str]) -> list[str]:
++    return sorted(names, key=_natural_key, reverse=True)
++
++
++def _release_key(name: str):
++    """version-16 before version-16-hotfix: the hotfix only breaks ties."""
++    hotfix = name.endswith("-hotfix")
++    return (_natural_key(name.removesuffix("-hotfix")), 0 if hotfix else 1)
++
++
++_cache: dict[str, tuple[float, RemoteRefs]] = {}
++_cache_lock = threading.Lock()
++
++
++def clear_cache() -> None:
++    """Forget cached listings (tests, and after a repository is changed)."""
++    with _cache_lock:
++        _cache.clear()
++
++
++def list_remote_refs(repo_url: str, timeout: int = LS_TIMEOUT_SECONDS) -> RemoteRefs:
++    """Branches and tags of *repo_url* via ``git ls-remote``.
++
++    Raises :class:`GitRefsError` for anything git could not read; callers are
++    expected to degrade rather than surface a network failure to the user.
++    """
++    url = (repo_url or "").strip()
++    if not url:
++        raise GitRefsError("A repository URL is required.")
++
++    now = time.monotonic()
++    with _cache_lock:
++        cached = _cache.get(url)
++        if cached is not None and cached[0] > now:
++            return cached[1]
++
++    env = git_env()
++    # Never wait on a credential prompt: this runs inside a web request.
++    env["GIT_TERMINAL_PROMPT"] = "0"
++    try:
++        result = subprocess.run(
++            ["git", "ls-remote", "--heads", "--tags", url],
++            capture_output=True,
++            text=True,
++            timeout=timeout,
++            env=env,
++        )
++    except subprocess.TimeoutExpired as exc:
++        raise GitRefsError(f"Timed out listing refs for {url}.") from exc
++    except OSError as exc:
++        raise GitRefsError("Git is required to list repository refs.") from exc
++
++    if result.returncode != 0:
++        detail = [line for line in (result.stderr or "").splitlines() if line.strip()]
++        raise GitRefsError(detail[-1] if detail else f"Could not list refs for {url}.")
++
++    refs = parse_refs(result.stdout)
++    if not refs.branches and not refs.tags:
++        raise GitRefsError(f"{url} has no branches or tags.")
++
++    with _cache_lock:
++        _cache[url] = (now + CACHE_TTL_SECONDS, refs)
++    return refs
 diff --git a/pilot/internal/git.py b/pilot/internal/git.py
 index 4f44ce2..1404311 100644
 --- a/pilot/internal/git.py
@@ -737,6 +1329,46 @@ index 4f44ce2..1404311 100644
      def fetch(self, *refspecs: str, timeout: float | None = None) -> bool:
          """Best-effort fetch from origin; returns False instead of raising on failure."""
          self.prune_stale_temp_packs()
+diff --git a/pilot/managers/environment.py b/pilot/managers/environment.py
+index 975c2bc..dbe8849 100644
+--- a/pilot/managers/environment.py
++++ b/pilot/managers/environment.py
+@@ -8,7 +8,7 @@ from pathlib import Path
+ from typing import TYPE_CHECKING
+ 
+ from pilot.core.app.node_packages import PACKAGE_MANAGERS, YARN, NodePackages
+-from pilot.exceptions import BenchError
++from pilot.exceptions import BenchError, CommandError
+ from pilot.managers.platform import add_mysqlclient_flags, is_macos, which
+ from pilot.managers.python_assets import PythonAssetBuilder
+ from pilot.utils import run_command
+@@ -169,8 +169,25 @@ class PythonEnvManager:
+     def install_app(self, app: "App") -> None:
+         uv = ensure_uv()
+         python = str(self.bench.env_path / "bin" / "python")
++        try:
++            self._install_editable(uv, python, app.editable_target)
++        except CommandError:
++            if app.editable_target == str(app.path):
++                raise
++            # An app's dev extra can be unsatisfiable while the app itself installs
++            # fine: frappe pins PyPika to a fork (0.51.x) whose own `pypika-stubs`
++            # dev dependency demands <0.49, so `-e frappe[dev]` resolves to nothing.
++            # Dev extras are tooling (typing stubs, test helpers) - the bench needs
++            # the app, so retry without them instead of aborting the whole init.
++            print(
++                "  dev extra is not resolvable for this app; installing it without the extra "
++                "(set bench.install_dev_extra = false to skip this retry)"
++            )
++            self._install_editable(uv, python, str(app.path))
++
++    def _install_editable(self, uv: str, python: str, target: str) -> None:
+         run_command(
+-            [uv, "pip", "install", "--python", python, "-e", app.editable_target],
++            [uv, "pip", "install", "--python", python, "-e", target],
+             stream_output=True,
+             env=self._build_env(),
+         )
 diff --git a/pilot/managers/processes/local.py b/pilot/managers/processes/local.py
 index 19ac3a6..b4720eb 100644
 --- a/pilot/managers/processes/local.py
@@ -767,3 +1399,34 @@ index 19ac3a6..b4720eb 100644
                  if is_critical[name]:
                      print(f"[{name}] exited with code {proc.returncode}", file=sys.stderr)
                      self._stopping = True
+diff --git a/pilot/tasks/new_site.py b/pilot/tasks/new_site.py
+index 8509ced..aadea73 100644
+--- a/pilot/tasks/new_site.py
++++ b/pilot/tasks/new_site.py
+@@ -45,6 +45,26 @@ class NewSiteTask(Task):
+             db_type=self.db_type,
+             on_progress=self.report,
+         )
++        self.route_site()
++
++    def route_site(self) -> None:
++        """Serve the new site on this server's address, without a hosts entry.
++
++        A single-site bench gets pinned to its site (see config_files), but a
++        running dev server read that pin when it started, so it has to restart
++        before `http://<server>:8000` reaches the site instead of 404ing on the
++        Host header. Nothing to do when the bench serves several sites: the Host
++        header is then the only way to tell them apart.
++        """
++        if self.bench.config.production.enabled:
++            return
++        from pilot.config.common_site_config import read_common_site_config
++
++        before = read_common_site_config(self.bench.sites_path).get("default_site")
++        self.bench.write_common_site_config()
++        after = read_common_site_config(self.bench.sites_path).get("default_site")
++        if before != after:
++            self.bench.reload_workers(web_only=True)
+ 
+     def fetch_missing_apps(self) -> None:
+         """Fetch marketplace apps before Site.provision validates the app list."""
