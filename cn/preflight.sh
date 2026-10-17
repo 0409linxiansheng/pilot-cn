@@ -298,6 +298,19 @@ check_runtime() {
     report_green "数据库与缓存" "缺 ${missing[*]}；环境层第 8 节会安装"
   fi
 
+  # 主仓库镜像是否真的加载成功。曾经因为 [[ -v ARRAY ]] 对关联数组恒为假，
+  # REPO_MIRRORS 被「补默认值」的分支清空，frappe/erpnext 实际从 GitHub 拉，
+  # 而界面上一切正常（路线 B 的代理掩盖了它）。
+  local mirror_count=0
+  if declare -p REPO_MIRRORS &>/dev/null; then
+    mirror_count="${#REPO_MIRRORS[@]}"
+  fi
+  if [[ "$mirror_count" -gt 0 ]]; then
+    report_ok "主仓库镜像" "${mirror_count} 条改写规则（frappe/erpnext → Gitee）"
+  else
+    report_yellow "主仓库镜像" "REPO_MIRRORS 为空；frappe/erpnext 会走通用代理而不是 Gitee"
+  fi
+
   # systemd 用户服务：Pilot 的 bench 服务（per-user MariaDB / Redis / 进程管理）
   # 全跑在 systemctl --user 里。光有 loginctl 不够 —— 运行用户必须开 linger，
   # 否则没有 /run/user/<uid>，pilot init 会直接失败（Failed to connect to bus）

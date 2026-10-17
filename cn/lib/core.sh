@@ -85,12 +85,12 @@ load_config() {
   # 数组缺省：只在未定义时才给默认值。绝不能无条件 `declare -gA NAME=()`，
   # 否则会把 mirrors.conf 里已经定义好的数组整个清空。
   : "${DEFAULT_SITE_APPS:=erpnext}"
-  [[ -v EXTRA_APPS ]]            || declare -gA EXTRA_APPS=()
-  [[ -v LOCAL_APP_PATHS ]]       || declare -ga LOCAL_APP_PATHS=()
-  [[ -v GITHUB_PROXY_CANDIDATES ]] || declare -ga GITHUB_PROXY_CANDIDATES=()
-  [[ -v MARIADB_KEY_URLS ]]      || declare -ga MARIADB_KEY_URLS=()
-  [[ -v CJK_FONT_PACKAGES ]]     || declare -ga CJK_FONT_PACKAGES=(fonts-noto-cjk fonts-noto-color-emoji)
-  [[ -v REPO_MIRRORS ]]          || declare -gA REPO_MIRRORS=()
+  declare -p EXTRA_APPS &>/dev/null            || declare -gA EXTRA_APPS=()
+  declare -p LOCAL_APP_PATHS &>/dev/null       || declare -ga LOCAL_APP_PATHS=()
+  declare -p GITHUB_PROXY_CANDIDATES &>/dev/null || declare -ga GITHUB_PROXY_CANDIDATES=()
+  declare -p MARIADB_KEY_URLS &>/dev/null      || declare -ga MARIADB_KEY_URLS=()
+  declare -p CJK_FONT_PACKAGES &>/dev/null     || declare -ga CJK_FONT_PACKAGES=(fonts-noto-cjk fonts-noto-color-emoji)
+  declare -p REPO_MIRRORS &>/dev/null          || declare -gA REPO_MIRRORS=()
 }
 
 # ---------------------------------------------------------------------------
